@@ -59,7 +59,7 @@ end
 
 # Meta expression head, these generally can't be deleted even when they are
 # in a dead branch but can be ignored when analyzing uses/liveness.
-is_meta_expr_head(head::Symbol) = (head === :inbounds || head === :boundscheck || head === :meta || head === :simdloop)
+is_meta_expr_head(head::Symbol) = (head === :inbounds || head === :boundscheck || head === :meta || head === :loopinfo)
 
 sym_isless(a::Symbol, b::Symbol) = ccall(:strcmp, Int32, (Ptr{UInt8}, Ptr{UInt8}), a, b) < 0
 
@@ -96,11 +96,12 @@ end
 
 function retrieve_code_info(linfo::MethodInstance)
     m = linfo.def::Method
+    c = nothing
     if isdefined(m, :generator)
         # user code might throw errors – ignore them
-        return get_staged(linfo)
-    else
-        # TODO: post-inference see if we can swap back to the original arrays?
+        c = get_staged(linfo)
+    end
+    if c === nothing && isdefined(m, :source)
         src = m.source
         if isa(src, Array{UInt8,1})
             c = ccall(:jl_uncompress_ast, Any, (Any, Any), m, src)
@@ -108,17 +109,17 @@ function retrieve_code_info(linfo::MethodInstance)
             c = copy(src::CodeInfo)
         end
     end
-    return c::CodeInfo
+    if c isa CodeInfo
+        c.parent = linfo
+        return c
+    end
 end
 
 function code_for_method(method::Method, @nospecialize(atypes), sparams::SimpleVector, world::UInt, preexisting::Bool=false)
     if world < min_world(method) || world > max_world(method)
         return nothing
     end
-    if isdefined(method, :generator) && !isdispatchtuple(atypes)
-        # don't call staged functions on abstract types.
-        # (see issues #8504, #10230)
-        # we can't guarantee that their type behavior is monotonic.
+    if isdefined(method, :generator) && !may_invoke_generator(method, atypes, sparams)
         return nothing
     end
     if preexisting
@@ -149,18 +150,18 @@ function method_for_inference_heuristics(method::Method, @nospecialize(sig), spa
     return nothing
 end
 
-argextype(@nospecialize(x), state) = argextype(x, state.src, state.sp, state.slottypes)
+argextype(@nospecialize(x), state) = argextype(x, state.src, state.sptypes, state.slottypes)
 
 const empty_slottypes = Any[]
 
-function argextype(@nospecialize(x), src, spvals::SimpleVector, slottypes::Vector{Any} = empty_slottypes)
+function argextype(@nospecialize(x), src, sptypes::Vector{Any}, slottypes::Vector{Any} = empty_slottypes)
     if isa(x, Expr)
         if x.head === :static_parameter
-            return sparam_type(spvals[x.args[1]])
+            return sptypes[x.args[1]]
         elseif x.head === :boundscheck
             return Bool
         elseif x.head === :copyast
-            return argextype(x.args[1], src, spvals, slottypes)
+            return argextype(x.args[1], src, sptypes, slottypes)
         end
         @assert false "argextype only works on argument-position values"
     elseif isa(x, SlotNumber)

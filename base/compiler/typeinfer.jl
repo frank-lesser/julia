@@ -1,7 +1,5 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
-const COMPILER_TEMP_SYM = Symbol("#temp#")
-
 # build (and start inferring) the inference frame for the linfo
 function typeinf(result::InferenceResult, cached::Bool, params::Params)
     frame = InferenceState(result, cached, params)
@@ -56,10 +54,12 @@ function typeinf(frame::InferenceState)
                 end
             end
         end
+    end
+    for caller in frames
+        caller.src.min_world = min_valid % Int
+        caller.src.max_world = max_valid % Int
         if cached
-            for caller in results
-                cache_result(caller, min_valid, max_valid)
-            end
+            cache_result(caller.result, min_valid, max_valid)
         end
     end
     # if we aren't cached, we don't need this edge
@@ -121,6 +121,9 @@ function cache_result(result::InferenceResult, min_valid::UInt, max_valid::UInt)
                      ccall(:jl_isa_compileable_sig, Int32, (Any, Any), result.linfo.specTypes, def) != 0)
                 if cache_the_tree
                     # compress code for non-toplevel thunks
+                    nslots = length(inferred_result.slotflags)
+                    resize!(inferred_result.slottypes, nslots)
+                    resize!(inferred_result.slotnames, nslots)
                     inferred_result = ccall(:jl_compress_ast, Any, (Any, Any), def, inferred_result)
                 else
                     inferred_result = nothing
@@ -190,6 +193,7 @@ function store_backedges(frame::InferenceState)
     if !toplevel && (frame.cached || frame.parent !== nothing)
         caller = frame.result.linfo
         for edges in frame.stmt_edges
+            edges === nothing && continue
             i = 1
             while i <= length(edges)
                 to = edges[i]
@@ -307,6 +311,8 @@ function type_annotate!(sv::InferenceState)
     # compute the required type for each slot
     # to hold all of the items assigned into it
     record_slot_assign!(sv)
+    sv.src.slottypes = sv.slottypes
+    sv.src.rettype = sv.bestguess
 
     # annotate variables load types
     # remove dead code optimization
@@ -314,7 +320,7 @@ function type_annotate!(sv::InferenceState)
     src = sv.src
     states = sv.stmt_types
     nargs = sv.nargs
-    nslots = length(states[1])
+    nslots = length(states[1]::Array{Any,1})
     undefs = fill(false, nslots)
     body = src.code::Array{Any,1}
     nexpr = length(body)
@@ -339,7 +345,7 @@ function type_annotate!(sv::InferenceState)
         st_i = states[i]
         expr = body[i]
         if isa(st_i, VarTable)
-            # st_i === ()  =>  unreached statement  (see issue #7836)
+            # st_i === nothing  =>  unreached statement  (see issue #7836)
             if isa(expr, Expr)
                 annotate_slot_load!(expr, st_i, sv, undefs)
             elseif isa(expr, Slot)
@@ -495,15 +501,19 @@ function typeinf_edge(method::Method, @nospecialize(atypes), sparams::SimpleVect
             frame.parent = caller
         end
         typeinf(frame)
-        return frame.bestguess, frame.inferred ? frame.linfo : nothing
+        return widenconst_bestguess(frame.bestguess), frame.inferred ? frame.linfo : nothing
     elseif frame === true
         # unresolvable cycle
         return Any, nothing
     end
     frame = frame::InferenceState
-    return frame.bestguess, nothing
+    return widenconst_bestguess(frame.bestguess), nothing
 end
 
+function widenconst_bestguess(bestguess)
+    !isa(bestguess, Const) && !isa(bestguess, Type) && return widenconst(bestguess)
+    return bestguess
+end
 
 #### entry points for inferring a MethodInstance given a type signature ####
 
@@ -539,16 +549,20 @@ function typeinf_ext(linfo::MethodInstance, params::Params)
                 if invoke_api(linfo) == 2
                     tree = ccall(:jl_new_code_info_uninit, Ref{CodeInfo}, ())
                     tree.code = Any[ Expr(:return, quoted(linfo.inferred_const)) ]
-                    tree.method_for_inference_limit_heuristics = nothing
-                    tree.slotnames = Any[ COMPILER_TEMP_SYM for i = 1:method.nargs ]
-                    tree.slotflags = fill(0x00, Int(method.nargs))
-                    tree.ssavaluetypes = 0
+                    nargs = Int(method.nargs)
+                    tree.slotnames = ccall(:jl_uncompress_argnames, Any, (Any,), method.slot_syms)
+                    tree.slotflags = fill(0x00, nargs)
+                    tree.ssavaluetypes = 1
                     tree.codelocs = Int32[1]
-                    tree.linetable = [LineInfoNode(method.module, method.name, method.file, Int(method.line), 0)]
+                    tree.linetable = [LineInfoNode(method, method.file, Int(method.line), 0)]
                     tree.inferred = true
-                    tree.ssaflags = UInt8[]
+                    tree.ssaflags = UInt8[0]
                     tree.pure = true
                     tree.inlineable = true
+                    tree.parent = linfo
+                    tree.rettype = typeof(linfo.inferred_const)
+                    tree.min_world = linfo.min_world
+                    tree.max_world = linfo.max_world
                     i == 2 && ccall(:jl_typeinf_end, Cvoid, ())
                     return svec(linfo, tree)
                 elseif isa(inf, CodeInfo)
@@ -629,7 +643,12 @@ end
 
 
 function return_type(@nospecialize(f), @nospecialize(t))
-    params = Params(ccall(:jl_get_tls_world_age, UInt, ()))
+    world = ccall(:jl_get_tls_world_age, UInt, ())
+    return ccall(:jl_call_in_typeinf_world, Any, (Ptr{Ptr{Cvoid}}, Cint), Any[_return_type, f, t, world], 4)
+end
+
+function _return_type(@nospecialize(f), @nospecialize(t), world)
+    params = Params(world)
     rt = Union{}
     if isa(f, Builtin)
         rt = builtin_tfunction(f, Any[t.parameters...], nothing, params)

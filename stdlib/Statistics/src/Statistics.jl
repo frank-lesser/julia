@@ -9,7 +9,7 @@ module Statistics
 
 using LinearAlgebra, SparseArrays
 
-using Base: has_offset_axes
+using Base: has_offset_axes, require_one_based_indexing
 
 export cor, cov, std, stdm, var, varm, mean!, mean,
     median!, median, middle, quantile!, quantile
@@ -248,12 +248,20 @@ function varm!(R::AbstractArray{S}, A::AbstractArray, m::AbstractArray; correcte
 end
 
 """
-    varm(v, m; dims, corrected::Bool=true)
+    varm(itr, m; dims, corrected::Bool=true)
 
-Compute the sample variance of a collection `v` with known mean(s) `m`,
-optionally over the given dimensions. `m` may contain means for each dimension of
-`v`. If `corrected` is `true`, then the sum is scaled with `n-1`,
-whereas the sum is scaled with `n` if `corrected` is `false` where `n = length(v)`.
+Compute the sample variance of collection `itr`, with known mean(s) `m`.
+
+The algorithm returns an estimator of the generative distribution's variance
+under the assumption that each entry of `itr` is an IID drawn from that generative
+distribution. For arrays, this computation is equivalent to calculating
+`sum((itr .- mean(itr)).^2) / (length(itr) - 1)`.
+If `corrected` is `true`, then the sum is scaled with `n-1`,
+whereas the sum is scaled with `n` if `corrected` is
+`false` with `n` the number of elements in `itr`.
+
+If `itr` is an `AbstractArray`, `dims` can be provided to compute the variance
+over dimensions, and `m` may contain means for each dimension of `itr`.
 
 !!! note
     If array contains `NaN` or [`missing`](@ref) values, the result is also
@@ -276,15 +284,22 @@ end
 
 
 """
-    var(v; dims, corrected::Bool=true, mean=nothing)
+    var(itr; dims, corrected::Bool=true, mean=nothing)
 
-Compute the sample variance of a vector or array `v`, optionally along the given dimensions.
-The algorithm will return an estimator of the generative distribution's variance
-under the assumption that each entry of `v` is an IID drawn from that generative
-distribution. This computation is equivalent to calculating `sum(abs2, v - mean(v)) /
-(length(v) - 1)`. If `corrected` is `true`, then the sum is scaled with `n-1`,
-whereas the sum is scaled with `n` if `corrected` is `false` where `n = length(v)`.
-The mean `mean` over the region may be provided.
+Compute the sample variance of collection `itr`.
+
+The algorithm returns an estimator of the generative distribution's variance
+under the assumption that each entry of `itr` is an IID drawn from that generative
+distribution. For arrays, this computation is equivalent to calculating
+`sum((itr .- mean(itr)).^2) / (length(itr) - 1)).
+If `corrected` is `true`, then the sum is scaled with `n-1`,
+whereas the sum is scaled with `n` if `corrected` is
+`false` with `n` the number of elements in `itr`.
+
+A pre-computed `mean` may be provided.
+
+If `itr` is an `AbstractArray`, `dims` can be provided to compute the variance
+over dimensions, and `mean` may contain means for each dimension of `itr`.
 
 !!! note
     If array contains `NaN` or [`missing`](@ref) values, the result is also
@@ -342,15 +357,22 @@ stdm(A::AbstractArray, m; corrected::Bool=true) =
     sqrt.(varm(A, m; corrected=corrected))
 
 """
-    std(v; corrected::Bool=true, mean=nothing, dims)
+    std(itr; corrected::Bool=true, mean=nothing[, dims])
 
-Compute the sample standard deviation of a vector or array `v`, optionally along the given
-dimensions. The algorithm returns an estimator of the generative distribution's standard
-deviation under the assumption that each entry of `v` is an IID drawn from that generative
-distribution. This computation is equivalent to calculating `sqrt(sum((v - mean(v)).^2) /
-(length(v) - 1))`. A pre-computed `mean` may be provided. If `corrected` is `true`,
-then the sum is scaled with `n-1`, whereas the sum is scaled with `n` if `corrected` is
-`false` where `n = length(v)`.
+Compute the sample standard deviation of collection `itr`.
+
+The algorithm returns an estimator of the generative distribution's standard
+deviation under the assumption that each entry of `itr` is an IID drawn from that generative
+distribution. For arrays, this computation is equivalent to calculating
+`sqrt(sum((itr .- mean(itr)).^2) / (length(itr) - 1))`.
+If `corrected` is `true`, then the sum is scaled with `n-1`,
+whereas the sum is scaled with `n` if `corrected` is
+`false` with `n` the number of elements in `itr`.
+
+A pre-computed `mean` may be provided.
+
+If `itr` is an `AbstractArray`, `dims` can be provided to compute the standard deviation
+over dimensions, and `means` may contain means for each dimension of `itr`.
 
 !!! note
     If array contains `NaN` or [`missing`](@ref) values, the result is also
@@ -376,12 +398,22 @@ std(iterable; corrected::Bool=true, mean=nothing) =
     sqrt(var(iterable, corrected=corrected, mean=mean))
 
 """
-    stdm(v, m; corrected::Bool=true)
+    stdm(itr, m; corrected::Bool=true)
 
-Compute the sample standard deviation of a vector `v`
-with known mean `m`. If `corrected` is `true`,
-then the sum is scaled with `n-1`, whereas the sum is
-scaled with `n` if `corrected` is `false` where `n = length(v)`.
+Compute the sample standard deviation of collection `itr`, with known mean(s) `m`.
+
+The algorithm returns an estimator of the generative distribution's standard
+deviation under the assumption that each entry of `itr` is an IID drawn from that generative
+distribution. For arrays, this computation is equivalent to calculating
+`sqrt(sum((itr .- mean(itr)).^2) / (length(itr) - 1))`.
+If `corrected` is `true`, then the sum is scaled with `n-1`,
+whereas the sum is scaled with `n` if `corrected` is
+`false` with `n` the number of elements in `itr`.
+
+A pre-computed `mean` may be provided.
+
+If `itr` is an `AbstractArray`, `dims` can be provided to compute the standard deviation
+over dimensions, and `m` may contain means for each dimension of `itr`.
 
 !!! note
     If array contains `NaN` or [`missing`](@ref) values, the result is also
@@ -513,7 +545,7 @@ clampcor(x) = x
 # cov2cor!
 
 function cov2cor!(C::AbstractMatrix{T}, xsd::AbstractArray) where T
-    @assert !has_offset_axes(C, xsd)
+    require_one_based_indexing(C, xsd)
     nx = length(xsd)
     size(C) == (nx, nx) || throw(DimensionMismatch("inconsistent dimensions"))
     for j = 1:nx
@@ -528,7 +560,7 @@ function cov2cor!(C::AbstractMatrix{T}, xsd::AbstractArray) where T
     return C
 end
 function cov2cor!(C::AbstractMatrix, xsd, ysd::AbstractArray)
-    @assert !has_offset_axes(C, ysd)
+    require_one_based_indexing(C, ysd)
     nx, ny = size(C)
     length(ysd) == ny || throw(DimensionMismatch("inconsistent dimensions"))
     for (j, y) in enumerate(ysd)   # fixme (iter): here and in all `cov2cor!` we assume that `C` is efficiently indexed by integers
@@ -539,7 +571,7 @@ function cov2cor!(C::AbstractMatrix, xsd, ysd::AbstractArray)
     return C
 end
 function cov2cor!(C::AbstractMatrix, xsd::AbstractArray, ysd)
-    @assert !has_offset_axes(C, xsd)
+    require_one_based_indexing(C, xsd)
     nx, ny = size(C)
     length(xsd) == nx || throw(DimensionMismatch("inconsistent dimensions"))
     for j in 1:ny
@@ -550,7 +582,7 @@ function cov2cor!(C::AbstractMatrix, xsd::AbstractArray, ysd)
     return C
 end
 function cov2cor!(C::AbstractMatrix, xsd::AbstractArray, ysd::AbstractArray)
-    @assert !has_offset_axes(C, xsd, ysd)
+    require_one_based_indexing(C, xsd, ysd)
     nx, ny = size(C)
     (length(xsd) == nx && length(ysd) == ny) ||
         throw(DimensionMismatch("inconsistent dimensions"))
@@ -581,7 +613,7 @@ corzm(x::AbstractMatrix, y::AbstractMatrix, vardim::Int=1) =
 corm(x::AbstractVector{T}, xmean) where {T} = one(real(T))
 corm(x::AbstractMatrix, xmean, vardim::Int=1) = corzm(x .- xmean, vardim)
 function corm(x::AbstractVector, mx, y::AbstractVector, my)
-    @assert !has_offset_axes(x, y)
+    require_one_based_indexing(x, y)
     n = length(x)
     length(y) == n || throw(DimensionMismatch("inconsistent lengths"))
     n > 0 || throw(ArgumentError("correlation only defined for non-empty vectors"))
@@ -806,7 +838,7 @@ julia> y
 """
 function quantile!(q::AbstractArray, v::AbstractVector, p::AbstractArray;
                    sorted::Bool=false)
-    @assert !has_offset_axes(q, v, p)
+    require_one_based_indexing(q, v, p)
     if size(p) != size(q)
         throw(DimensionMismatch("size of p, $(size(p)), must equal size of q, $(size(q))"))
     end
@@ -837,7 +869,7 @@ end
 # Function to perform partial sort of v for quantiles in given range
 function _quantilesort!(v::AbstractArray, sorted::Bool, minp::Real, maxp::Real)
     isempty(v) && throw(ArgumentError("empty data vector"))
-    @assert !has_offset_axes(v)
+    require_one_based_indexing(v)
 
     if !sorted
         lv = length(v)
@@ -855,7 +887,7 @@ end
 # Core quantile lookup function: assumes `v` sorted
 @inline function _quantile(v::AbstractVector, p::Real)
     0 <= p <= 1 || throw(ArgumentError("input probability out of [0,1] range"))
-    @assert !has_offset_axes(v)
+    require_one_based_indexing(v)
 
     lv = length(v)
     f0 = (lv - 1)*p # 0-based interpolated index
@@ -947,7 +979,7 @@ end
 
 # This is the function that does the reduction underlying var/std
 function centralize_sumabs2!(R::AbstractArray{S}, A::SparseMatrixCSC{Tv,Ti}, means::AbstractArray) where {S,Tv,Ti}
-    @assert !has_offset_axes(R, A, means)
+    require_one_based_indexing(R, A, means)
     lsiz = Base.check_reducedims(R,A)
     size(means) == size(R) || error("size of means must match size of R")
     isempty(R) || fill!(R, zero(S))

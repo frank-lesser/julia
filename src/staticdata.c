@@ -62,7 +62,7 @@ static const jl_fptr_args_t id_to_fptrs[] = {
     jl_f_typeassert, jl_f__apply, jl_f__apply_pure, jl_f__apply_latest, jl_f_isdefined,
     jl_f_tuple, jl_f_svec, jl_f_intrinsic_call, jl_f_invoke_kwsorter,
     jl_f_getfield, jl_f_setfield, jl_f_fieldtype, jl_f_nfields,
-    jl_f_arrayref, jl_f_arrayset, jl_f_arraysize, jl_f_apply_type,
+    jl_f_arrayref, jl_f_const_arrayref, jl_f_arrayset, jl_f_arraysize, jl_f_apply_type,
     jl_f_applicable, jl_f_invoke, jl_f_sizeof, jl_f__expr, jl_f__typevar,
     jl_f_ifelse,
     NULL };
@@ -1016,6 +1016,7 @@ static void jl_update_all_fptrs(jl_serializer_state *s)
     for (i = 0; i < sysimg_fvars_max; i++) {
         uintptr_t val = (uintptr_t)&linfos[i];
         uint32_t offset = load_uint32(&val);
+        linfos[i] = NULL;
         if (offset != 0) {
             int specfunc = 1;
             if (offset & ((uintptr_t)1 << (8 * sizeof(uint32_t) - 1))) {
@@ -1631,7 +1632,7 @@ static void jl_init_serializer2(int for_serialize)
                      jl_module_type, jl_tvar_type, jl_method_instance_type, jl_method_type,
                      jl_emptysvec, jl_emptytuple, jl_false, jl_true, jl_nothing, jl_any_type,
                      call_sym, invoke_sym, goto_ifnot_sym, return_sym, jl_symbol("tuple"),
-                     unreachable_sym,
+                     unreachable_sym, jl_an_empty_string,
                      jl_linenumbernode_type, jl_lineinfonode_type,
                      jl_gotonode_type, jl_quotenode_type,
                      jl_pinode_type, jl_phinode_type, jl_phicnode_type, jl_upsilonnode_type,

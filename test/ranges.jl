@@ -269,6 +269,12 @@ end
             @test findall(in(span), r) == 1:6
         end
     end
+    @testset "findfirst" begin
+        @test findfirst(isequal(7), 1:2:10) == 4
+        @test findfirst(==(7), 1:2:10) == 4
+        @test findfirst(==(10), 1:2:10) == nothing
+        @test findfirst(==(11), 1:2:10) == nothing
+    end
     @testset "reverse" begin
         @test reverse(reverse(1:10)) == 1:10
         @test reverse(reverse(typemin(Int):typemax(Int))) == typemin(Int):typemax(Int)
@@ -400,9 +406,18 @@ end
 @test length(1:4:typemax(Int)) == div(typemax(Int),4) + 1
 
 @testset "overflow in length" begin
-    @test_throws OverflowError length(0:typemax(Int))
-    @test_throws OverflowError length(typemin(Int):typemax(Int))
-    @test_throws OverflowError length(-1:typemax(Int)-1)
+    Tset = Int === Int64 ? (Int,UInt,Int128,UInt128) :
+                           (Int,UInt,Int64,UInt64,Int128, UInt128)
+    for T in Tset
+        @test_throws OverflowError length(zero(T):typemax(T))
+        @test_throws OverflowError length(typemin(T):typemax(T))
+        @test_throws OverflowError length(zero(T):one(T):typemax(T))
+        @test_throws OverflowError length(typemin(T):one(T):typemax(T))
+        if T <: Signed
+            @test_throws OverflowError length(-one(T):typemax(T)-one(T))
+            @test_throws OverflowError length(-one(T):one(T):typemax(T)-one(T))
+        end
+    end
 end
 @testset "loops involving typemin/typemax" begin
     n = 0
@@ -1410,6 +1425,13 @@ end
 
 @testset "getindex" begin
     @test getindex((typemax(UInt64)//one(UInt64):typemax(UInt64)//one(UInt64)), 1) == typemax(UInt64)//one(UInt64)
+end
+
+@testset "Issue #30006" begin
+    @test Base.Slice(Base.OneTo(5))[Int32(1)] == Int32(1)
+    @test Base.Slice(Base.OneTo(3))[Int8(2)] == Int8(2)
+    @test Base.Slice(1:10)[Int32(2)] == Int32(2)
+    @test Base.Slice(1:10)[Int8(2)] == Int8(2)
 end
 
 @testset "allocation of TwicePrecision call" begin

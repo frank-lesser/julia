@@ -641,6 +641,7 @@ export
 
 # tasks and conditions
     Condition,
+    Event,
     current_task,
     islocked,
     istaskdone,
@@ -699,7 +700,9 @@ export
     fieldnames,
     fieldcount,
     fieldtypes,
+    hasfield,
     propertynames,
+    hasproperty,
     isabstracttype,
     isbitstype,
     isprimitivetype,

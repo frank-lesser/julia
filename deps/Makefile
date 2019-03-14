@@ -8,10 +8,12 @@ BUILDDIR := scratch
 else
 BUILDDIR := .
 endif
+env_OS := $(OS)# get the real value of the OS variable, since we are unforunately obliterating the SuiteSparse build with our variable
 include $(SRCDIR)/Versions.make
 include $(JULIAHOME)/Make.inc
 include $(SRCDIR)/tools/common.mk
 include $(SRCDIR)/tools/git-external.mk
+include $(SRCDIR)/tools/bb-install.mk
 
 # Special comments:
 #
