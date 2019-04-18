@@ -243,6 +243,7 @@ Base.evalfile
 Base.esc
 Base.@inbounds
 Base.@boundscheck
+Base.@propagate_inbounds
 Base.@inline
 Base.@noinline
 Base.@nospecialize
@@ -346,6 +347,7 @@ Base.MissingException
 Core.OutOfMemoryError
 Core.ReadOnlyMemoryError
 Core.OverflowError
+Base.ProcessFailedException
 Core.StackOverflowError
 Base.SystemError
 Core.TypeError

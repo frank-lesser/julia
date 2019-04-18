@@ -207,7 +207,7 @@ worker_timeout() = parse(Float64, get(ENV, "JULIA_WORKER_TIMEOUT", "60.0"))
 
 ## worker creation and setup ##
 """
-    start_worker([out::IO=stdout], cookie::AbstractString=readline(stdin))
+    start_worker([out::IO=stdout], cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
 
 `start_worker` is an internal function which is the default entry point for
 worker processes connecting via TCP/IP. It sets up the process as a Julia cluster
@@ -215,18 +215,19 @@ worker.
 
 host:port information is written to stream `out` (defaults to stdout).
 
-The function closes stdin (after reading the cookie if required), redirects stderr to stdout,
-listens on a free port (or if specified, the port in the `--bind-to` command
-line option) and schedules tasks to process incoming TCP connections and requests.
+The function reads the cookie from stdin if required, and  listens on a free port
+(or if specified, the port in the `--bind-to` command line option) and schedules
+tasks to process incoming TCP connections and requests. It also (optionally)
+closes stdin and redirects stderr to stdout.
 
 It does not return.
 """
-start_worker(cookie::AbstractString=readline(stdin)) = start_worker(stdout, cookie)
-function start_worker(out::IO, cookie::AbstractString=readline(stdin))
+start_worker(cookie::AbstractString=readline(stdin); kwargs...) = start_worker(stdout, cookie; kwargs...)
+function start_worker(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     init_multi()
 
-    close(stdin) # workers will not use it
-    redirect_stderr(stdout)
+    close_stdin && close(stdin) # workers will not use it
+    stderr_to_stdout && redirect_stderr(stdout)
 
     init_worker(cookie)
     interface = IPv4(LPROC.bind_addr)
@@ -1029,20 +1030,23 @@ function _rmprocs(pids, waitfor)
 end
 
 
-struct ProcessExitedException <: Exception end
-
 """
-    ProcessExitedException()
+    ProcessExitedException(worker_id::Int)
 
 After a client Julia process has exited, further attempts to reference the dead child will
 throw this exception.
 """
-ProcessExitedException()
+struct ProcessExitedException <: Exception
+    worker_id::Int
+end
+
+# No-arg constructor added for compatibility with Julia 1.0 & 1.1, should be deprecated in the future
+ProcessExitedException() = ProcessExitedException(-1)
 
 worker_from_id(i) = worker_from_id(PGRP, i)
 function worker_from_id(pg::ProcessGroup, i)
     if !isempty(map_del_wrkr) && in(i, map_del_wrkr)
-        throw(ProcessExitedException())
+        throw(ProcessExitedException(i))
     end
     w = get(map_pid_wrkr, i, nothing)
     if w === nothing
@@ -1136,7 +1140,7 @@ function deregister_worker(pg, pid)
 
         # throw exception to tasks waiting for this pid
         for (id, rv) in tonotify
-            close(rv.c, ProcessExitedException())
+            close(rv.c, ProcessExitedException(pid))
             delete!(pg.refs, id)
         end
     end
