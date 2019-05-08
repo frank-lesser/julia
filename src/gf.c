@@ -421,13 +421,13 @@ static int very_general_type(jl_value_t *t)
 jl_value_t *jl_nth_slot_type(jl_value_t *sig, size_t i)
 {
     sig = jl_unwrap_unionall(sig);
-    size_t len = jl_field_count(sig);
+    size_t len = jl_nparams(sig);
     if (len == 0)
         return NULL;
     if (i < len-1)
         return jl_tparam(sig, i);
-    if (jl_is_vararg_type(jl_tparam(sig,len-1)))
-        return jl_unwrap_vararg(jl_tparam(sig,len-1));
+    if (jl_is_vararg_type(jl_tparam(sig, len-1)))
+        return jl_unwrap_vararg(jl_tparam(sig, len-1));
     if (i == len-1)
         return jl_tparam(sig, i);
     return NULL;
@@ -473,7 +473,7 @@ static void jl_compilation_sig(
     jl_value_t *decl = definition->sig;
     assert(jl_is_tuple_type(tt));
     size_t i, np = jl_nparams(tt);
-    size_t nargs = definition->nargs; // == jl_field_count(jl_unwrap_unionall(decl));
+    size_t nargs = definition->nargs; // == jl_nparams(jl_unwrap_unionall(decl));
     for (i = 0; i < np; i++) {
         jl_value_t *elt = jl_tparam(tt, i);
         jl_value_t *decl_i = jl_nth_slot_type(decl, i);
@@ -678,7 +678,7 @@ JL_DLLEXPORT int jl_isa_compileable_sig(
         return 0;
 
     size_t i, np = jl_nparams(type);
-    size_t nargs = definition->nargs; // == jl_field_count(jl_unwrap_unionall(decl));
+    size_t nargs = definition->nargs; // == jl_nparams(jl_unwrap_unionall(decl));
     if (np == 0)
         return nargs == 0;
 
@@ -880,7 +880,7 @@ static jl_method_instance_t *cache_method(
     if (!cache_with_orig && mt) {
         // now examine what will happen if we chose to use this sig in the cache
         // TODO: should we first check `compilationsig <: definition`?
-        temp = ml_matches(mt->defs, 0, compilationsig, -1, 0, world, &min_valid, &max_valid); // TODO: use MAX_UNSPECIALIZED_CONFLICTS?
+        temp = ml_matches(mt->defs, 0, compilationsig, -1, 1, world, &min_valid, &max_valid); // TODO: use MAX_UNSPECIALIZED_CONFLICTS?
         int guards = 0;
         if (temp == jl_false) {
             cache_with_orig = 1;
@@ -2565,7 +2565,7 @@ int jl_has_concrete_subtype(jl_value_t *typ)
         return 1;
     if (((jl_datatype_t*)typ)->name == jl_namedtuple_typename)
         return jl_has_concrete_subtype(jl_tparam1(typ));
-    jl_svec_t *fields = ((jl_datatype_t*)typ)->types;
+    jl_svec_t *fields = jl_get_fieldtypes((jl_datatype_t*)typ);
     size_t i, l = jl_svec_len(fields);
     if (l != ((jl_datatype_t*)typ)->ninitialized)
         if (((jl_datatype_t*)typ)->name != jl_tuple_typename)

@@ -896,6 +896,8 @@ STATIC_INLINE void jl_array_uint8_set(void *a, size_t i, uint8_t x) JL_NOTSAFEPO
 #define jl_gf_name(f)   (jl_gf_mtable(f)->name)
 
 // struct type info
+JL_DLLEXPORT jl_svec_t *jl_compute_fieldtypes(jl_datatype_t *st);
+#define jl_get_fieldtypes(st) ((st)->types ? (st)->types : jl_compute_fieldtypes((st)))
 STATIC_INLINE jl_svec_t *jl_field_names(jl_datatype_t *st) JL_NOTSAFEPOINT
 {
     jl_svec_t *names = st->names;
@@ -907,8 +909,10 @@ STATIC_INLINE jl_sym_t *jl_field_name(jl_datatype_t *st, size_t i) JL_NOTSAFEPOI
 {
     return (jl_sym_t*)jl_svecref(jl_field_names(st), i);
 }
-#define jl_field_type(st,i)    jl_svecref(((jl_datatype_t*)st)->types, (i))
-#define jl_field_count(st)     jl_svec_len(((jl_datatype_t*)st)->types)
+STATIC_INLINE jl_value_t *jl_field_type(jl_datatype_t *st, size_t i)
+{
+    return jl_svecref(jl_get_fieldtypes(st), i);
+}
 #define jl_datatype_size(t)    (((jl_datatype_t*)t)->size)
 #define jl_datatype_align(t)   (((jl_datatype_t*)t)->layout->alignment)
 #define jl_datatype_nbits(t)   ((((jl_datatype_t*)t)->size)*8)
@@ -1430,6 +1434,8 @@ JL_DLLEXPORT jl_sym_t *jl_get_ARCH(void);
 JL_DLLEXPORT jl_value_t *jl_environ(int i);
 
 // throwing common exceptions
+JL_DLLEXPORT jl_value_t *jl_vexceptionf(jl_datatype_t *exception_type,
+                                        const char *fmt, va_list args);
 JL_DLLEXPORT void JL_NORETURN jl_error(const char *str);
 JL_DLLEXPORT void JL_NORETURN jl_errorf(const char *fmt, ...);
 JL_DLLEXPORT void JL_NORETURN jl_exceptionf(jl_datatype_t *ty,
