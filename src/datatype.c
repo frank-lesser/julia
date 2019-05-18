@@ -48,6 +48,7 @@ JL_DLLEXPORT jl_methtable_t *jl_new_method_table(jl_sym_t *name, jl_module_t *mo
     mt->backedges = NULL;
     JL_MUTEX_INIT(&mt->writelock);
     mt->offs = 1;
+    mt->frozen = 0;
     return mt;
 }
 
@@ -223,7 +224,7 @@ unsigned jl_special_vector_alignment(size_t nfields, jl_value_t *t)
 
 STATIC_INLINE int jl_is_datatype_make_singleton(jl_datatype_t *d)
 {
-    return (!d->abstract && jl_datatype_size(d) == 0 && d != jl_sym_type && d->name != jl_array_typename &&
+    return (!d->abstract && jl_datatype_size(d) == 0 && d != jl_symbol_type && d->name != jl_array_typename &&
             d->uid != 0 && !d->mutabl);
 }
 
@@ -337,7 +338,7 @@ void jl_compute_field_offsets(jl_datatype_t *st)
         return;
     uint32_t nfields = jl_svec_len(st->types);
     if (nfields == 0) {
-        if (st == jl_sym_type || st == jl_string_type) {
+        if (st == jl_symbol_type || st == jl_string_type) {
             // opaque layout - heap-allocated blob
             static const jl_datatype_layout_t opaque_byte_layout = {0, 1, 0, 1, 0};
             st->layout = &opaque_byte_layout;
@@ -371,7 +372,7 @@ void jl_compute_field_offsets(jl_datatype_t *st)
         desc = (jl_fielddesc32_t*)alloca(descsz);
     int haspadding = 0;
     assert(st->name == jl_tuple_typename ||
-           st == jl_sym_type ||
+           st == jl_symbol_type ||
            st == jl_simplevector_type ||
            nfields != 0);
 
@@ -452,11 +453,8 @@ JL_DLLEXPORT jl_datatype_t *jl_new_datatype(
     jl_typename_t *tn = NULL;
     JL_GC_PUSH2(&t, &tn);
 
-    if (t == NULL)
-        t = jl_new_uninitialized_datatype();
-    else
-        tn = t->name;
-    // init before possibly calling jl_new_typename_in
+    // init enough before possibly calling jl_new_typename_in
+    t = jl_new_uninitialized_datatype();
     t->super = super;
     if (super != NULL) jl_gc_wb(t, t->super);
     t->parameters = parameters;
@@ -471,23 +469,28 @@ JL_DLLEXPORT jl_datatype_t *jl_new_datatype(
     t->ditype = NULL;
     t->size = 0;
 
-    if (tn == NULL) {
-        t->name = NULL;
-        if (jl_is_typename(name)) {
-            tn = (jl_typename_t*)name;
+    t->name = NULL;
+    if (jl_is_typename(name)) {
+        // This code-path is used by the Serialization module to by-pass normal expectations
+        tn = (jl_typename_t*)name;
+    }
+    else {
+        tn = jl_new_typename_in((jl_sym_t*)name, module);
+        if (super == jl_function_type || super == jl_builtin_type || jl_symbol_name(name)[0] == '#') {
+            // Callable objects (including compiler-generated closures) get independent method tables
+            // as an optimization
+            tn->mt = jl_new_method_table(name, module);
+            jl_gc_wb(tn, tn->mt);
+            if (jl_svec_len(parameters) > 0)
+                tn->mt->offs = 0;
         }
         else {
-            tn = jl_new_typename_in((jl_sym_t*)name, module);
-            if (!abstract) {
-                tn->mt = jl_new_method_table(name, module);
-                jl_gc_wb(tn, tn->mt);
-                if (jl_svec_len(parameters) > 0)
-                    tn->mt->offs = 0;
-            }
+            // Everything else, gets to use the unified table
+            tn->mt = jl_nonfunction_mt;
         }
-        t->name = tn;
-        jl_gc_wb(t, t->name);
     }
+    t->name = tn;
+    jl_gc_wb(t, t->name);
     t->name->names = fnames;
     jl_gc_wb(t->name, t->name->names);
 
@@ -623,8 +626,7 @@ void jl_assign_bits(void *dest, jl_value_t *bits)
 
 #define PERMBOXN_FUNC(nb,nw)                                            \
     jl_value_t *jl_permbox##nb(jl_datatype_t *t, int##nb##_t x)         \
-    {                                                                   \
-        assert(jl_isbits(t));                                           \
+    {   /* NOTE: t must be a concrete isbits datatype */                \
         assert(jl_datatype_size(t) == sizeof(x));                       \
         jl_value_t *v = jl_gc_permobj(nw * sizeof(void*), t);           \
         *(int##nb##_t*)jl_data_ptr(v) = x;                              \

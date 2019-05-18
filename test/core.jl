@@ -2387,6 +2387,23 @@ let x = Issue2403(20)
     @test issue2403func(x) == 34
 end
 
+# issue #14919
+abstract type A14919; end
+struct B14919 <: A14919; end
+struct C14919 <: A14919; end
+struct D14919 <: Function; end
+(::A14919)() = "It's a brand new world"
+(::Union{C14919,D14919})() = "Boo."
+@test B14919()() == "It's a brand new world"
+@test C14919()() == D14919()() == "Boo."
+
+for f in (:Any, :Function, :(Core.Builtin), :(Union{Nothing, Type}), :(Union{typeof(+), Type}), :(Union{typeof(+), typeof(-)}), :(Base.Callable))
+    @test_throws ErrorException("Method dispatch is unimplemented currently for this method signature") @eval (::$f)() = 1
+end
+for f in (:(Core.arrayref), :((::typeof(Core.arrayref))), :((::Core.IntrinsicFunction)))
+    @test_throws ErrorException("cannot add methods to a builtin function") @eval $f() = 1
+end
+
 # issue #8798
 let
     npy_typestrs = Dict("b1"=>Bool,
@@ -6834,22 +6851,6 @@ struct T29145{A,B}
     end
 end
 @test_throws TypeError T29145()
-
-# interpreted but inferred/optimized top-level expressions with vars
-let code = """
-           while true
-               try
-                   this_is_undefined_29213
-                   ed = 0
-                   break
-               finally
-                   break
-               end
-           end
-           print(42)
-           """
-    @test read(`$(Base.julia_cmd()) --startup-file=no --compile=min -e $code`, String) == "42"
-end
 
 # issue #29175
 function f29175(tuple::T) where {T<:Tuple}

@@ -573,6 +573,11 @@ static int var_gt(jl_tvar_t *b, jl_value_t *a, jl_stenv_t *e, int param)
         return 0;
     bb->lb = simple_join(bb->lb, a);
     assert(bb->lb != (jl_value_t*)b);
+    if (jl_is_typevar(a)) {
+        jl_varbinding_t *aa = lookup(e, (jl_tvar_t*)a);
+        if (aa && !aa->right && bb->depth0 != aa->depth0 && param == 2 && var_outside(e, b, (jl_tvar_t*)a))
+            return subtype_left_var(aa->ub, aa->lb, e);
+    }
     return 1;
 }
 
@@ -960,7 +965,7 @@ static int subtype(jl_value_t *x, jl_value_t *y, jl_stenv_t *e, int param)
             if (xr) {
                 if (yy) record_var_occurrence(yy, e, param);
                 if (yr) {
-                    if (xx) record_var_occurrence(xx, e, param);
+                    record_var_occurrence(xx, e, param);
                     return subtype(xx->lb, yy->ub, e, 0);
                 }
                 return var_lt((jl_tvar_t*)x, y, e, param);
@@ -1410,6 +1415,7 @@ static int subtype_in_env(jl_value_t *x, jl_value_t *y, jl_stenv_t *e)
     e2.vars = e->vars;
     e2.intersection = e->intersection;
     e2.ignore_free = e->ignore_free;
+    e2.invdepth = e->invdepth;
     e2.envsz = e->envsz;
     e2.envout = e->envout;
     e2.envidx = e->envidx;
@@ -1442,24 +1448,38 @@ JL_DLLEXPORT int jl_is_not_broken_subtype(jl_value_t *a, jl_value_t *b)
     return !jl_is_kind(b) || !jl_is_type_type(a); // || jl_is_datatype_singleton((jl_datatype_t*)jl_tparam0(a));
 }
 
-int jl_tuple_isa(jl_value_t **child, size_t cl, jl_datatype_t *pdt)
+int jl_tuple1_isa(jl_value_t *child1, jl_value_t **child, size_t cl, jl_datatype_t *pdt)
 {
     if (jl_is_tuple_type(pdt) && !jl_is_va_tuple(pdt)) {
         if (cl != jl_nparams(pdt))
             return 0;
         size_t i;
-        for(i=0; i < cl; i++) {
-            if (!jl_isa(child[i], jl_tparam(pdt,i)))
+        if (!jl_isa(child1, jl_tparam(pdt, 0)))
+            return 0;
+        for (i = 1; i < cl; i++) {
+            if (!jl_isa(child[i - 1], jl_tparam(pdt, i)))
                 return 0;
         }
         return 1;
     }
-    jl_value_t *tu = (jl_value_t*)arg_type_tuple(child, cl);
+    jl_value_t *tu = (jl_value_t*)arg_type_tuple(child1, child, cl);
     int ans;
     JL_GC_PUSH1(&tu);
     ans = jl_subtype(tu, (jl_value_t*)pdt);
     JL_GC_POP();
     return ans;
+}
+
+int jl_tuple_isa(jl_value_t **child, size_t cl, jl_datatype_t *pdt)
+{
+    if (cl == 0) {
+        if (pdt == jl_emptytuple_type)
+            return 1;
+        if (jl_is_tuple_type(pdt) && (jl_nparams(pdt) != 1 || !jl_is_va_tuple(pdt)))
+            return 0;
+        return jl_isa(jl_emptytuple, (jl_value_t*)pdt);
+    }
+    return jl_tuple1_isa(child[0], &child[1], cl, pdt);
 }
 
 // returns true if the intersection of `t` and `Type` is non-empty and not a kind
@@ -1500,10 +1520,18 @@ JL_DLLEXPORT int jl_isa(jl_value_t *x, jl_value_t *t)
                 if (((jl_datatype_t*)t2)->name == jl_type_typename) {
                     jl_value_t *tp = jl_tparam0(t2);
                     if (jl_is_typevar(tp)) {
-                        while (jl_is_typevar(tp))
-                            tp = ((jl_tvar_t*)tp)->ub;
-                        if (!jl_has_free_typevars(tp))
-                            return jl_subtype(x, tp);
+                        if (((jl_tvar_t*)tp)->lb == jl_bottom_type) {
+                            while (jl_is_typevar(tp))
+                                tp = ((jl_tvar_t*)tp)->ub;
+                            if (!jl_has_free_typevars(tp))
+                                return jl_subtype(x, tp);
+                        }
+                        else if (((jl_tvar_t*)tp)->ub == (jl_value_t*)jl_any_type) {
+                            while (jl_is_typevar(tp))
+                                tp = ((jl_tvar_t*)tp)->lb;
+                            if (!jl_has_free_typevars(tp))
+                                return jl_subtype(tp, x);
+                        }
                     }
                 }
                 else {
@@ -1624,6 +1652,8 @@ static int subtype_in_env_existential(jl_value_t *x, jl_value_t *y, jl_stenv_t *
 {
     jl_varbinding_t *v = e->vars;
     int len = 0;
+    if (x == jl_bottom_type || y == (jl_value_t*)jl_any_type)
+        return 1;
     while (v != NULL) {
         len++;
         v = v->prev;
