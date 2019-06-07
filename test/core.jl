@@ -227,8 +227,8 @@ let ft = Base.datatype_fieldtypes
     @test ft(elT2.body)[1].parameters[1] === elT2
     @test Base.isconcretetype(ft(elT2.body)[1])
 end
-struct S22624{A,B,C} <: Ref{S22624{Int64,A}}; end
-@test @isdefined S22624
+#struct S22624{A,B,C} <: Ref{S22624{Int64,A}}; end
+@test_broken @isdefined S22624
 
 # issue #3890
 mutable struct A3890{T1}
@@ -3487,6 +3487,11 @@ end
 # 11996
 @test_throws ErrorException NTuple{-1, Int}
 @test_throws TypeError Union{Int, 1}
+
+@test_throws ErrorException Vararg{Any,-2}
+@test_throws ErrorException Vararg{Int, N} where N<:T where T
+@test_throws ErrorException Vararg{Int, N} where N<:Integer
+@test_throws ErrorException Vararg{Int, N} where N>:Integer
 
 mutable struct FooNTuple{N}
     z::Tuple{Integer, Vararg{Int, N}}
