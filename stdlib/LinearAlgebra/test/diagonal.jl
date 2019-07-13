@@ -199,9 +199,12 @@ Random.seed!(1)
         @test (r = transpose(Matrix(D)) * vv ; mul!(vvv, transpose(D), vv) ≈ r ≈ vvv)
 
         UUU = similar(UU)
-        @test (r = Matrix(D) * UU   ; mul!(UUU, D, UU) ≈ r ≈ UUU)
-        @test (r = Matrix(D)' * UU  ; mul!(UUU, adjoint(D), UU) ≈ r ≈ UUU)
-        @test (r = transpose(Matrix(D)) * UU ; mul!(UUU, transpose(D), UU) ≈ r ≈ UUU)
+        for transformA in (identity, adjoint, transpose)
+            for transformD in (identity, Adjoint, Transpose, adjoint, transpose)
+                @test mul!(UUU, transformA(UU), transformD(D)) ≈  transformA(UU) * Matrix(transformD(D))
+                @test mul!(UUU, transformD(D), transformA(UU)) ≈  Matrix(transformD(D)) * transformA(UU)
+            end
+        end
 
         # make sure that mul!(A, {Adj|Trans}(B)) works with B as a Diagonal
         VV = Array(D)
@@ -455,6 +458,15 @@ end
     @test det(D) == 4
 end
 
+@testset "linear solve for block diagonal matrices" begin
+    D = Diagonal([rand(2,2) for _ in 1:5])
+    b = [rand(2,2) for _ in 1:5]
+    B = [rand(2,2) for _ in 1:5, _ in 1:5]
+    @test ldiv!(D, copy(b)) ≈ Diagonal(inv.(D.diag)) * b
+    @test ldiv!(D, copy(B)) ≈ Diagonal(inv.(D.diag)) * B
+    @test rdiv!(copy(B), D) ≈ B * Diagonal(inv.(D.diag))
+end
+
 @testset "multiplication with Symmetric/Hermitian" begin
     for T in (Float64, ComplexF64)
         D = Diagonal(randn(T, n))
@@ -537,6 +549,10 @@ end
     E = eigen(D, sortby=abs) # sortby keyword supported for eigen(::Diagonal)
     @test E.values == [0.2, 0.4, -1.3]
     @test E.vectors == [0 1 0; 1 0 0; 0 0 1]
+end
+
+@testset "sum" begin
+    @test sum(Diagonal([1,2,3])) == 6
 end
 
 end # module TestDiagonal

@@ -20,13 +20,16 @@
 #include <setjmp.h>
 #ifndef _OS_WINDOWS_
 #  define jl_jmp_buf sigjmp_buf
-#  if defined(_CPU_ARM_) || defined(_CPU_PPC_)
+#  if defined(_CPU_ARM_) || defined(_CPU_PPC_) || defined(_CPU_WASM_)
 #    define MAX_ALIGN 8
 #  elif defined(_CPU_AARCH64_)
 // int128 is 16 bytes aligned on aarch64
 #    define MAX_ALIGN 16
+#  elif defined(_P64)
+// Generically we assume MAX_ALIGN is sizeof(void*)
+#    define MAX_ALIGN 8
 #  else
-#    define MAX_ALIGN sizeof(void*)
+#    define MAX_ALIGN 4
 #  endif
 #else
 #  include "win32_ucontext.h"
@@ -254,6 +257,7 @@ typedef struct _jl_code_info_t {
     jl_value_t *slottypes; // inferred types of slots
     jl_value_t *rettype;
     jl_method_instance_t *parent; // context (optionally, if available, otherwise nothing)
+    jl_value_t *edges; // forward edges to method instances that must be invalidated
     size_t min_world;
     size_t max_world;
     // various boolean properties:
@@ -442,6 +446,7 @@ typedef struct _jl_datatype_t {
     uint8_t isbitstype; // relevant query for C-api and type-parameters
     uint8_t zeroinit; // if one or more fields requires zero-initialization
     uint8_t isinlinealloc; // if this is allocated inline
+    uint8_t has_concrete_subtype; // If clear, no value will have this datatype
     void *struct_decl;  //llvm::Type*
     void *ditype; // llvm::MDNode* to be used as llvm::DIType(ditype)
 } jl_datatype_t;
@@ -457,7 +462,7 @@ typedef struct {
     jl_value_t *value;
     jl_value_t *globalref;  // cached GlobalRef for this binding
     struct _jl_module_t *owner;  // for individual imported bindings
-    uint8_t constp:1;
+    uint8_t constp;
     uint8_t exportp:1;
     uint8_t imported:1;
     uint8_t deprecated:2; // 0=not deprecated, 1=renamed, 2=moved to another package
@@ -481,6 +486,7 @@ typedef struct _jl_module_t {
     uint32_t counter;
     int32_t nospecialize;  // global bit flags: initialization for new methods
     uint8_t istopmod;
+    jl_mutex_t lock;
 } jl_module_t;
 
 // one Type-to-Value entry
@@ -1729,6 +1735,11 @@ void (jl_longjmp)(jmp_buf _Buf, int _Value);
 #define jl_setjmp_name "jl_setjmp"
 #define jl_setjmp(a,b) jl_setjmp(a)
 #define jl_longjmp(a,b) jl_longjmp(a,b)
+#elif defined(_OS_EMSCRIPTEN_)
+#define jl_setjmp(a,b) setjmp(a)
+#define jl_longjmp(a,b) longjmp(a,b)
+#define jl_setjmp_f    setjmp
+#define jl_setjmp_name "setjmp"
 #else
 // determine actual entry point name
 #if defined(sigsetjmp)
@@ -1780,11 +1791,6 @@ JL_DLLEXPORT int jl_process_events(uv_loop_t *loop);
 JL_DLLEXPORT uv_loop_t *jl_global_event_loop(void);
 
 JL_DLLEXPORT void jl_close_uv(uv_handle_t *handle);
-
-JL_DLLEXPORT int jl_tcp_bind(uv_tcp_t *handle, uint16_t port, uint32_t host,
-                             unsigned int flags);
-
-JL_DLLEXPORT int jl_sizeof_ios_t(void);
 
 JL_DLLEXPORT jl_array_t *jl_take_buffer(ios_t *s);
 

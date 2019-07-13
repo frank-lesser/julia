@@ -1707,7 +1707,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_datatype_type->name->wrapper = (jl_value_t*)jl_datatype_type;
     jl_datatype_type->super = (jl_datatype_t*)jl_type_type;
     jl_datatype_type->parameters = jl_emptysvec;
-    jl_datatype_type->name->names = jl_perm_symsvec(20,
+    jl_datatype_type->name->names = jl_perm_symsvec(21,
                                                     "name",
                                                     "super",
                                                     "parameters",
@@ -1726,9 +1726,10 @@ void jl_init_types(void) JL_GC_DISABLED
                                                     "isbitstype",
                                                     "zeroinit",
                                                     "isinlinealloc",
+                                                    "has_concrete_subtype",
                                                     "llvm::StructType",
                                                     "llvm::DIType");
-    jl_datatype_type->types = jl_svec(20,
+    jl_datatype_type->types = jl_svec(21,
                                       jl_typename_type,
                                       jl_datatype_type,
                                       jl_simplevector_type,
@@ -1737,7 +1738,7 @@ void jl_init_types(void) JL_GC_DISABLED
                                       jl_any_type, jl_any_type, jl_any_type, jl_any_type,
                                       jl_any_type, jl_any_type, jl_any_type, jl_any_type,
                                       jl_any_type, jl_any_type, jl_any_type, jl_any_type,
-                                      jl_any_type, jl_any_type);
+                                      jl_any_type, jl_any_type, jl_any_type);
     jl_datatype_type->instance = NULL;
     jl_datatype_type->uid = jl_assign_type_uid();
     jl_datatype_type->struct_decl = NULL;
@@ -1965,8 +1966,8 @@ void jl_init_types(void) JL_GC_DISABLED
                             jl_type_type, // TupleType
                             jl_any_type, // TupleType
                             jl_any_type, // SimpleVector{TupleType}
-                            jl_long_type, // Int
-                            jl_long_type, // Int
+                            jl_ulong_type, // UInt
+                            jl_ulong_type, // UInt
                             jl_any_type, // Any
                             jl_bool_type,
                             jl_bool_type,
@@ -2069,7 +2070,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_code_info_type =
         jl_new_datatype(jl_symbol("CodeInfo"), core,
                         jl_any_type, jl_emptysvec,
-                        jl_perm_symsvec(17,
+                        jl_perm_symsvec(18,
                             "code",
                             "codelocs",
                             "ssavaluetypes",
@@ -2081,13 +2082,14 @@ void jl_init_types(void) JL_GC_DISABLED
                             "slottypes",
                             "rettype",
                             "parent",
+                            "edges",
                             "min_world",
                             "max_world",
                             "inferred",
                             "inlineable",
                             "propagate_inbounds",
                             "pure"),
-                        jl_svec(17,
+                        jl_svec(18,
                             jl_array_any_type,
                             jl_any_type,
                             jl_any_type,
@@ -2099,13 +2101,14 @@ void jl_init_types(void) JL_GC_DISABLED
                             jl_any_type,
                             jl_any_type,
                             jl_any_type,
-                            jl_long_type,
-                            jl_long_type,
+                            jl_any_type,
+                            jl_ulong_type,
+                            jl_ulong_type,
                             jl_bool_type,
                             jl_bool_type,
                             jl_bool_type,
                             jl_bool_type),
-                        0, 1, 17);
+                        0, 1, 18);
 
     jl_method_type =
         jl_new_datatype(jl_symbol("Method"), core,
@@ -2136,8 +2139,8 @@ void jl_init_types(void) JL_GC_DISABLED
                             jl_module_type,
                             jl_symbol_type,
                             jl_int32_type,
-                            jl_long_type,
-                            jl_long_type,
+                            jl_ulong_type,
+                            jl_ulong_type,
                             jl_type_type,
                             jl_any_type, // Union{Array, Nothing}
                             jl_any_type, // TypeMap
@@ -2193,8 +2196,8 @@ void jl_init_types(void) JL_GC_DISABLED
                         jl_svec(11,
                             jl_method_instance_type,
                             jl_any_type,
-                            jl_long_type,
-                            jl_long_type,
+                            jl_ulong_type,
+                            jl_ulong_type,
                             jl_any_type,
                             jl_any_type,
                             jl_any_type,
@@ -2293,8 +2296,9 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_svecset(jl_datatype_type->types, 15, jl_bool_type);
     jl_svecset(jl_datatype_type->types, 16, jl_bool_type);
     jl_svecset(jl_datatype_type->types, 17, jl_bool_type);
-    jl_svecset(jl_datatype_type->types, 18, jl_voidpointer_type);
+    jl_svecset(jl_datatype_type->types, 18, jl_bool_type);
     jl_svecset(jl_datatype_type->types, 19, jl_voidpointer_type);
+    jl_svecset(jl_datatype_type->types, 20, jl_voidpointer_type);
     jl_svecset(jl_typename_type->types, 1, jl_module_type);
     jl_svecset(jl_typename_type->types, 6, jl_long_type);
     jl_svecset(jl_typename_type->types, 3, jl_type_type);
