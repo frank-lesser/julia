@@ -602,9 +602,9 @@ JL_CALLABLE(jl_f__apply)
             jl_value_t *next = jl_apply_generic(jl_iterate_func, args, 1);
             while (next != jl_nothing) {
                 roots[stackalloc] = next;
-                jl_value_t *value = jl_fieldref(next, 0);
+                jl_value_t *value = jl_get_nth_field_checked(next, 0);
                 roots[stackalloc + 1] = value;
-                jl_value_t *state = jl_fieldref(next, 1);
+                jl_value_t *state = jl_get_nth_field_checked(next, 1);
                 roots[stackalloc] = state;
                 _grow_to(&roots[0], &newargs, &arg_heap, &n_alloc, n + precount + 1, extra);
                 JL_GC_ASSERT_LIVE(value);
@@ -1293,7 +1293,7 @@ void jl_init_primitives(void) JL_GC_DISABLED
     jl_builtin_applicable = add_builtin_func("applicable", jl_f_applicable);
     jl_builtin_invoke = add_builtin_func("invoke", jl_f_invoke);
     jl_typename_t *itn = ((jl_datatype_t*)jl_typeof(jl_builtin_invoke))->name;
-    jl_value_t *ikws = jl_new_generic_function_with_supertype(itn->name, jl_core_module, jl_builtin_type, 1);
+    jl_value_t *ikws = jl_new_generic_function_with_supertype(itn->name, jl_core_module, jl_builtin_type);
     itn->mt->kwsorter = ikws;
     jl_gc_wb(itn->mt, ikws);
     jl_mk_builtin_func((jl_datatype_t*)jl_typeof(ikws), jl_symbol_name(jl_gf_name(ikws)), jl_f_invoke_kwsorter);

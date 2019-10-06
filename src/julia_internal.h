@@ -429,7 +429,7 @@ jl_value_t *jl_wrap_vararg(jl_value_t *t, jl_value_t *n);
 void jl_assign_bits(void *dest, jl_value_t *bits) JL_NOTSAFEPOINT;
 jl_expr_t *jl_exprn(jl_sym_t *head, size_t n);
 jl_function_t *jl_new_generic_function(jl_sym_t *name, jl_module_t *module);
-jl_function_t *jl_new_generic_function_with_supertype(jl_sym_t *name, jl_module_t *module, jl_datatype_t *st, int iskw);
+jl_function_t *jl_new_generic_function_with_supertype(jl_sym_t *name, jl_module_t *module, jl_datatype_t *st);
 void jl_init_main_module(void);
 int jl_is_submodule(jl_module_t *child, jl_module_t *parent);
 jl_array_t *jl_get_loaded_modules(void);
@@ -636,10 +636,15 @@ typedef int bt_cursor_t;
 #endif
 // Special marker in backtrace data for encoding interpreter frames
 #define JL_BT_INTERP_FRAME (((uintptr_t)0)-1)
-size_t rec_backtrace(uintptr_t *data, size_t maxsize) JL_NOTSAFEPOINT;
-size_t rec_backtrace_ctx(uintptr_t *data, size_t maxsize, bt_context_t *ctx, int add_interp_frames) JL_NOTSAFEPOINT;
+// Maximum number of elements of bt_data taken up by interpreter frame
+#define JL_BT_MAX_ENTRY_SIZE 3
+size_t rec_backtrace(uintptr_t *bt_data, size_t maxsize, int skip) JL_NOTSAFEPOINT;
+// Record backtrace from a signal handler. `ctx` is the context of the code
+// which was asynchronously interrupted.
+size_t rec_backtrace_ctx(uintptr_t *bt_data, size_t maxsize, bt_context_t *ctx,
+                         int add_interp_frames) JL_NOTSAFEPOINT;
 #ifdef LIBOSXUNWIND
-size_t rec_backtrace_ctx_dwarf(uintptr_t *data, size_t maxsize, bt_context_t *ctx, int add_interp_frames) JL_NOTSAFEPOINT;
+size_t rec_backtrace_ctx_dwarf(uintptr_t *bt_data, size_t maxsize, bt_context_t *ctx, int add_interp_frames) JL_NOTSAFEPOINT;
 #endif
 JL_DLLEXPORT void jl_get_backtrace(jl_array_t **bt, jl_array_t **bt2);
 void jl_critical_error(int sig, bt_context_t *context, uintptr_t *bt_data, size_t *bt_size);
