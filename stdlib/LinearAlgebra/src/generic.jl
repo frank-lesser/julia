@@ -75,6 +75,9 @@ julia> C
 end
 
 @inline function _rmul_or_fill!(C::AbstractArray, beta::Number)
+    if isempty(C)
+        return C
+    end
     if iszero(beta)
         fill!(C, zero(eltype(C)))
     else
@@ -238,6 +241,11 @@ function ldiv!(s::Number, X::AbstractArray)
     end
     X
 end
+ldiv!(Y::AbstractArray, s::Number, X::AbstractArray) = Y .= s .\ X
+
+# Generic fallback. This assumes that B and Y have the same sizes.
+ldiv!(Y::AbstractArray, A::AbstractMatrix, B::AbstractArray) = ldiv!(A, copyto!(Y, B))
+
 
 """
     cross(x, y)

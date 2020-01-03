@@ -194,10 +194,7 @@ JL_DLLEXPORT void JL_NORETURN jl_eof_error(void)
 // get kwsorter field, with appropriate error check and message
 JL_DLLEXPORT jl_value_t *jl_get_keyword_sorter(jl_value_t *f)
 {
-    jl_methtable_t *mt = jl_gf_mtable(f);
-    if (mt->kwsorter == NULL)
-        jl_errorf("function %s does not accept keyword arguments", jl_symbol_name(mt->name));
-    return mt->kwsorter;
+    return jl_get_kwsorter(jl_typeof(f));
 }
 
 JL_DLLEXPORT void jl_typeassert(jl_value_t *x, jl_value_t *t)
@@ -297,7 +294,7 @@ JL_DLLEXPORT void jl_restore_excstack(size_t state)
 void jl_copy_excstack(jl_excstack_t *dest, jl_excstack_t *src) JL_NOTSAFEPOINT
 {
     assert(dest->reserved_size >= src->top);
-    memcpy(jl_excstack_raw(dest), jl_excstack_raw(src), sizeof(uintptr_t)*src->top);
+    memcpy(jl_excstack_raw(dest), jl_excstack_raw(src), sizeof(jl_bt_element_t)*src->top);
     dest->top = src->top;
 }
 
@@ -317,15 +314,16 @@ void jl_reserve_excstack(jl_excstack_t **stack JL_REQUIRE_ROOTED_SLOT,
 }
 
 void jl_push_excstack(jl_excstack_t **stack JL_REQUIRE_ROOTED_SLOT JL_ROOTING_ARGUMENT,
-                       jl_value_t *exception JL_ROOTED_ARGUMENT,
-                       uintptr_t *bt_data, size_t bt_size)
+                      jl_value_t *exception JL_ROOTED_ARGUMENT,
+                      jl_bt_element_t *bt_data, size_t bt_size)
 {
     jl_reserve_excstack(stack, (*stack ? (*stack)->top : 0) + bt_size + 2);
     jl_excstack_t *s = *stack;
-    memcpy(jl_excstack_raw(s) + s->top, bt_data, sizeof(uintptr_t)*bt_size);
+    jl_bt_element_t *rawstack = jl_excstack_raw(s);
+    memcpy(rawstack + s->top, bt_data, sizeof(jl_bt_element_t)*bt_size);
     s->top += bt_size + 2;
-    jl_excstack_raw(s)[s->top-2] = bt_size;
-    jl_excstack_raw(s)[s->top-1] = (uintptr_t)exception;
+    rawstack[s->top-2].uintptr = bt_size;
+    rawstack[s->top-1].jlvalue = exception;
 }
 
 // conversion -----------------------------------------------------------------
@@ -344,6 +342,22 @@ JL_DLLEXPORT jl_value_t *jl_value_ptr(jl_value_t *a)
 {
     return a;
 }
+
+// optimization of setfield which bypasses boxing of the idx (and checking field type validity)
+JL_DLLEXPORT void jl_set_nth_field(jl_value_t *v, size_t idx0, jl_value_t *rhs)
+{
+    jl_datatype_t *st = (jl_datatype_t*)jl_typeof(v);
+    if (!st->mutabl)
+        jl_errorf("setfield! immutable struct of type %s cannot be changed", jl_symbol_name(st->name->name));
+    if (idx0 >= jl_datatype_nfields(st))
+        jl_bounds_error_int(v, idx0 + 1);
+    //jl_value_t *ft = jl_field_type(st, idx0);
+    //if (!jl_isa(rhs, ft)) {
+    //    jl_type_error("setfield!", ft, rhs);
+    //}
+    set_nth_field(st, (void*)v, idx0, rhs);
+}
+
 
 // parsing --------------------------------------------------------------------
 
@@ -385,7 +399,7 @@ JL_DLLEXPORT jl_nullable_float64_t jl_try_substrtod(char *str, size_t offset, si
             newstr = (char*)alloca(len + 1);
         }
         else {
-            newstr = tofree = (char*)malloc(len + 1);
+            newstr = tofree = (char*)malloc_s(len + 1);
         }
         memcpy(newstr, bstr, len);
         newstr[len] = 0;
@@ -444,7 +458,7 @@ JL_DLLEXPORT jl_nullable_float32_t jl_try_substrtof(char *str, size_t offset, si
             newstr = (char*)alloca(len + 1);
         }
         else {
-            newstr = tofree = (char*)malloc(len + 1);
+            newstr = tofree = (char*)malloc_s(len + 1);
         }
         memcpy(newstr, bstr, len);
         newstr[len] = 0;
