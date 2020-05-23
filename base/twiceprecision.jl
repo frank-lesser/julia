@@ -424,6 +424,9 @@ function (:)(start::T, step::T, stop::T) where T<:Union{Float16,Float32,Float64}
     steprangelen_hp(T, start, step, 0, len, 1)
 end
 
+step(r::StepRangeLen{T,TwicePrecision{T},TwicePrecision{T}}) where {T<:AbstractFloat} = T(r.step)
+step(r::StepRangeLen{T,TwicePrecision{T},TwicePrecision{T}}) where {T} = T(r.step)
+
 function _range(a::T, st::T, ::Nothing, len::Integer) where T<:Union{Float16,Float32,Float64}
     start_n, start_d = rat(a)
     step_n, step_d = rat(st)
@@ -487,12 +490,12 @@ StepRangeLen{T,R,S}(r::StepRangeLen{T,R,S}) where {T<:AbstractFloat,R<:TwicePrec
 StepRangeLen{T,R,S}(r::StepRangeLen) where {T<:AbstractFloat,R<:TwicePrecision,S<:TwicePrecision} =
     _convertSRL(StepRangeLen{T,R,S}, r)
 
-(::Type{StepRangeLen{Float64}})(r::StepRangeLen) =
+StepRangeLen{Float64}(r::StepRangeLen) =
     _convertSRL(StepRangeLen{Float64,TwicePrecision{Float64},TwicePrecision{Float64}}, r)
 StepRangeLen{T}(r::StepRangeLen) where {T<:IEEEFloat} =
     _convertSRL(StepRangeLen{T,Float64,Float64}, r)
 
-(::Type{StepRangeLen{Float64}})(r::AbstractRange) =
+StepRangeLen{Float64}(r::AbstractRange) =
     _convertSRL(StepRangeLen{Float64,TwicePrecision{Float64},TwicePrecision{Float64}}, r)
 StepRangeLen{T}(r::AbstractRange) where {T<:IEEEFloat} =
     _convertSRL(StepRangeLen{T,Float64,Float64}, r)
@@ -533,6 +536,21 @@ function __convertSRL(::Type{StepRangeLen{T,R,S}}, r::AbstractRange{U}) where {T
 end
 
 function sum(r::StepRangeLen)
+    l = length(r)
+    # Compute the contribution of step over all indices.
+    # Indexes on opposite side of r.offset contribute with opposite sign,
+    #    r.step * (sum(1:np) - sum(1:nn))
+    np, nn = l - r.offset, r.offset - 1  # positive, negative
+    # To prevent overflow in sum(1:n), multiply its factors by the step
+    sp, sn = sumpair(np), sumpair(nn)
+    W = widen(Int)
+    Δn = W(sp[1]) * W(sp[2]) - W(sn[1]) * W(sn[2])
+    s = r.step * Δn
+    # Add in contributions of ref
+    ref = r.ref * l
+    convert(eltype(r), s + ref)
+end
+function sum(r::StepRangeLen{<:Any,<:TwicePrecision,<:TwicePrecision})
     l = length(r)
     # Compute the contribution of step over all indices.
     # Indexes on opposite side of r.offset contribute with opposite sign,
