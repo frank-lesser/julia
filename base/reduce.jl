@@ -306,25 +306,29 @@ with reduction `op` over an empty array with element type of `T`.
 
 If not defined, this will throw an `ArgumentError`.
 """
-reduce_empty(op, T) = _empty_reduce_error()
-reduce_empty(::typeof(+), T) = zero(T)
+reduce_empty(op, ::Type{T}) where {T} = _empty_reduce_error()
+reduce_empty(::typeof(+), ::Type{Union{}}) = _empty_reduce_error()
+reduce_empty(::typeof(+), ::Type{T}) where {T} = zero(T)
 reduce_empty(::typeof(+), ::Type{Bool}) = zero(Int)
-reduce_empty(::typeof(*), T) = one(T)
+reduce_empty(::typeof(*), ::Type{Union{}}) = _empty_reduce_error()
+reduce_empty(::typeof(*), ::Type{T}) where {T} = one(T)
 reduce_empty(::typeof(*), ::Type{<:AbstractChar}) = ""
 reduce_empty(::typeof(&), ::Type{Bool}) = true
 reduce_empty(::typeof(|), ::Type{Bool}) = false
 
-reduce_empty(::typeof(add_sum), T) = reduce_empty(+, T)
+reduce_empty(::typeof(add_sum), ::Type{Union{}}) = _empty_reduce_error()
+reduce_empty(::typeof(add_sum), ::Type{T}) where {T} = reduce_empty(+, T)
 reduce_empty(::typeof(add_sum), ::Type{T}) where {T<:SmallSigned}  = zero(Int)
 reduce_empty(::typeof(add_sum), ::Type{T}) where {T<:SmallUnsigned} = zero(UInt)
-reduce_empty(::typeof(mul_prod), T) = reduce_empty(*, T)
+reduce_empty(::typeof(mul_prod), ::Type{Union{}}) = _empty_reduce_error()
+reduce_empty(::typeof(mul_prod), ::Type{T}) where {T} = reduce_empty(*, T)
 reduce_empty(::typeof(mul_prod), ::Type{T}) where {T<:SmallSigned}  = one(Int)
 reduce_empty(::typeof(mul_prod), ::Type{T}) where {T<:SmallUnsigned} = one(UInt)
 
-reduce_empty(op::BottomRF, T) = reduce_empty(op.rf, T)
-reduce_empty(op::MappingRF, T) = mapreduce_empty(op.f, op.rf, T)
-reduce_empty(op::FilteringRF, T) = reduce_empty(op.rf, T)
-reduce_empty(op::FlipArgs, T) = reduce_empty(op.f, T)
+reduce_empty(op::BottomRF, ::Type{T}) where {T} = reduce_empty(op.rf, T)
+reduce_empty(op::MappingRF, ::Type{T}) where {T} = mapreduce_empty(op.f, op.rf, T)
+reduce_empty(op::FilteringRF, ::Type{T}) where {T} = reduce_empty(op.rf, T)
+reduce_empty(op::FlipArgs, ::Type{T}) where {T} = reduce_empty(op.f, T)
 
 """
     Base.mapreduce_empty(f, op, T)
@@ -572,11 +576,11 @@ function mapreduce_impl(f, op::Union{typeof(max), typeof(min)},
     start = first + 1
     simdstop  = start + chunk_len - 4
     while simdstop <= last - 3
-        # short circuit in case of NaN
-        v1 == v1 || return v1
-        v2 == v2 || return v2
-        v3 == v3 || return v3
-        v4 == v4 || return v4
+        # short circuit in case of NaN or missing
+        (v1 == v1) === true || return v1
+        (v2 == v2) === true || return v2
+        (v3 == v3) === true || return v3
+        (v4 == v4) === true || return v4
         @inbounds for i in start:4:simdstop
             v1 = _fast(op, v1, f(A[i+0]))
             v2 = _fast(op, v2, f(A[i+1]))
@@ -836,7 +840,7 @@ end
 
 ## count
 
-_bool(f::Function) = x->f(x)::Bool
+_bool(f) = x->f(x)::Bool
 
 """
     count(p, itr) -> Integer

@@ -4,8 +4,6 @@
 # constants #
 #############
 
-const DEFAULT_INTERPRETER = NativeInterpreter(UInt(0))
-
 const CoreNumType = Union{Int32, Int64, Float32, Float64}
 
 const _REF_NAME = Ref.body.name
@@ -129,17 +127,18 @@ function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(f),
     end
     # try constant propagation if only 1 method is inferred to non-Bottom
     # this is in preparation for inlining, or improving the return result
-    if nonbot > 0 && seen == napplicable && !edgecycle && isa(rettype, Type) && InferenceParams(interp).ipo_constant_propagation
+    is_unused = call_result_unused(sv)
+    if nonbot > 0 && seen == napplicable && (!edgecycle || !is_unused) && isa(rettype, Type) && InferenceParams(interp).ipo_constant_propagation
         # if there's a possibility we could constant-propagate a better result
         # (hopefully without doing too much work), try to do that now
         # TODO: it feels like this could be better integrated into abstract_call_method / typeinf_edge
-        const_rettype = abstract_call_method_with_const_args(interp, rettype, f, argtypes, applicable[nonbot]::SimpleVector, sv)
+        const_rettype = abstract_call_method_with_const_args(interp, rettype, f, argtypes, applicable[nonbot]::SimpleVector, sv, edgecycle)
         if const_rettype ⊑ rettype
             # use the better result, if it's a refinement of rettype
             rettype = const_rettype
         end
     end
-    if call_result_unused(sv) && !(rettype === Bottom)
+    if is_unused && !(rettype === Bottom)
         # We're mainly only here because the optimizer might want this code,
         # but we ourselves locally don't typically care about it locally
         # (beyond checking if it always throws).
@@ -186,7 +185,7 @@ function const_prop_profitable(@nospecialize(arg))
     return false
 end
 
-function abstract_call_method_with_const_args(interp::AbstractInterpreter, @nospecialize(rettype), @nospecialize(f), argtypes::Vector{Any}, match::SimpleVector, sv::InferenceState)
+function abstract_call_method_with_const_args(interp::AbstractInterpreter, @nospecialize(rettype), @nospecialize(f), argtypes::Vector{Any}, match::SimpleVector, sv::InferenceState, edgecycle::Bool)
     method = match[3]::Method
     nargs::Int = method.nargs
     method.isva && (nargs -= 1)
@@ -242,7 +241,7 @@ function abstract_call_method_with_const_args(interp::AbstractInterpreter, @nosp
     mi = mi::MethodInstance
     # decide if it's likely to be worthwhile
     if !force_inference
-        code = inf_for_methodinstance(interp, mi, get_world_counter(interp))
+        code = get(code_cache(interp), mi, nothing)
         declared_inline = isdefined(method, :source) && ccall(:jl_ir_flag_inlineable, Bool, (Any,), method.source)
         cache_inlineable = declared_inline
         if isdefined(code, :inferred) && !cache_inlineable
@@ -260,15 +259,35 @@ function abstract_call_method_with_const_args(interp::AbstractInterpreter, @nosp
     inf_cache = get_inference_cache(interp)
     inf_result = cache_lookup(mi, argtypes, inf_cache)
     if inf_result === nothing
+        if edgecycle
+            # if there might be a cycle, check to make sure we don't end up
+            # calling ourselves here.
+            infstate = sv
+            cyclei = 0
+            while !(infstate === nothing)
+                if method === infstate.linfo.def && any(infstate.result.overridden_by_const)
+                    return Any
+                end
+                if cyclei < length(infstate.callers_in_cycle)
+                    cyclei += 1
+                    infstate = infstate.callers_in_cycle[cyclei]
+                else
+                    cyclei = 0
+                    infstate = infstate.parent
+                end
+            end
+        end
         inf_result = InferenceResult(mi, argtypes)
         frame = InferenceState(inf_result, #=cache=#false, interp)
+        frame === nothing && return Any # this is probably a bad generated function (unsound), but just ignore it
         frame.limited = true
         frame.parent = sv
         push!(inf_cache, inf_result)
         typeinf(interp, frame) || return Any
     end
     result = inf_result.result
-    isa(result, InferenceState) && return Any # TODO: unexpected, is this recursive constant inference?
+    # if constant inference hits a cycle, just bail out
+    isa(result, InferenceState) && return Any
     add_backedge!(inf_result.linfo, sv)
     return result
 end
@@ -1028,6 +1047,17 @@ function abstract_eval(interp::AbstractInterpreter, @nospecialize(e), vtypes::Va
         end
     elseif e.head === :splatnew
         t = instanceof_tfunc(abstract_eval(interp, e.args[1], vtypes, sv))[1]
+        if length(e.args) == 2 && isconcretetype(t) && !t.mutable
+            at = abstract_eval(interp, e.args[2], vtypes, sv)
+            n = fieldcount(t)
+            if isa(at, Const) && isa(at.val, Tuple) && n == length(at.val) &&
+                    _all(i->at.val[i] isa fieldtype(t, i), 1:n)
+                t = Const(ccall(:jl_new_structt, Any, (Any, Any), t, at.val))
+            elseif isa(at, PartialStruct) && at ⊑ Tuple && n == length(at.fields) &&
+                    _all(i->at.fields[i] ⊑ fieldtype(t, i), 1:n)
+                t = PartialStruct(t, at.fields)
+            end
+        end
     elseif e.head === :&
         abstract_eval(interp, e.args[1], vtypes, sv)
         t = Any

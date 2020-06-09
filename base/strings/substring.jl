@@ -99,6 +99,11 @@ isvalid(s::SubString{String}) = isvalid(String, s)
 thisind(s::SubString{String}, i::Int) = _thisind_str(s, i)
 nextind(s::SubString{String}, i::Int) = _nextind_str(s, i)
 
+function ==(a::Union{String, SubString{String}}, b::Union{String, SubString{String}})
+    s = sizeof(a)
+    s == sizeof(b) && 0 == _memcmp(a, b, s)
+end
+
 function cmp(a::SubString{String}, b::SubString{String})
     na = sizeof(a)
     nb = sizeof(b)
@@ -215,6 +220,19 @@ function repeat(s::Union{String, SubString{String}}, r::Integer)
         end
     end
     return out
+end
+
+function filter(f, s::Union{String, SubString{String}})
+    out = StringVector(sizeof(s))
+    offset = 1
+    for c in s
+        if f(c)
+            offset += __unsafe_string!(out, c, offset)
+        end
+    end
+    resize!(out, offset-1)
+    sizehint!(out, offset-1)
+    return String(out)
 end
 
 getindex(s::AbstractString, r::UnitRange{<:Integer}) = SubString(s, r)

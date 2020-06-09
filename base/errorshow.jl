@@ -42,7 +42,6 @@ function showerror(io::IO, ex::BoundsError)
         print(io, ": attempt to access ")
         summary(io, ex.a)
         if isdefined(ex, :i)
-            !isa(ex.a, AbstractArray) && print(io, "\n ")
             print(io, " at index [")
             if ex.i isa AbstractRange
                 print(io, ex.i)
@@ -86,9 +85,7 @@ end
 
 function showerror(io::IO, ex, bt; backtrace=true)
     try
-        with_output_color(get(io, :color, false) ? error_color() : :nothing, io) do io
-            showerror(io, ex)
-        end
+        showerror(io, ex)
     finally
         backtrace && show_backtrace(io, bt)
     end

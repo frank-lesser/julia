@@ -308,7 +308,7 @@
         (let loop ((stmts body))
           (if (eq? functionloc (cadr stmts))
               (set-cdr! stmts (cddr stmts))
-              (loop (cdr body)))))
+              (loop (cdr stmts)))))
     functionloc))
 
 ;; construct the (method ...) expression for one primitive method definition,
@@ -418,6 +418,8 @@
 
 (define (keywords-method-def-expr name sparams argl body rett)
   (let* ((kargl (cdar argl))  ;; keyword expressions (= k v)
+         (annotations (map (lambda (a) `(meta ,(cadr a) ,(arg-name (cadr (caddr a)))))
+                           (filter nospecialize-meta? kargl)))
          (kargl (map (lambda (a)
                        (if (nospecialize-meta? a) (caddr a) a))
                      kargl))
@@ -457,8 +459,6 @@
                                 keynames))
          ;; list of function's initial line number and meta nodes (empty if none)
          (prologue (extract-method-prologue body))
-         (annotations (map (lambda (a) `(meta ,(cadr a) ,(arg-name (cadr (caddr a)))))
-                           (filter nospecialize-meta? kargl)))
          ;; body statements
          (stmts (cdr body))
          (positional-sparams (filter-sparams (cons 'list pargl-all) sparams))
@@ -519,6 +519,11 @@
              (call (core kwftype) ,ftype)) ,kw ,@pargl ,@vararg)
           `(block
             ,@(filter linenum? prologue)
+            ;; nospecialize meta for just positional args
+            ,@(map (lambda (m)
+                     `(meta ,(cadr m) ,@(filter (lambda (v) (not (memq v keynames)))
+                                                (cddr m))))
+                   (filter nospecialize-meta? prologue))
             ,(scopenest
               keynames
               (map (lambda (v dflt)
@@ -653,13 +658,14 @@
 (define (throw-unassigned-kw-args argl)
   (define (throw-unassigned argname)
     `(call (core throw) (call (core UndefKeywordError) (inert ,argname))))
+  (define (to-kw x)
+    (cond ((symbol? x) `(kw ,x ,(throw-unassigned x)))
+          ((decl? x) `(kw ,x ,(throw-unassigned (cadr x))))
+          ((nospecialize-meta? x) `(meta ,(cadr x) ,(to-kw (caddr x))))
+          (else x)))
   (if (has-parameters? argl)
       (cons (cons 'parameters
-                  (map (lambda (x)
-                         (cond ((symbol? x) `(kw ,x ,(throw-unassigned x)))
-                               ((decl? x) `(kw ,x ,(throw-unassigned (cadr x))))
-                               (else x)))
-                       (cdar argl)))
+                  (map to-kw (cdar argl)))
             (cdr argl))
       argl))
 
@@ -878,7 +884,8 @@
           (defs2 (if (null? defs)
                      (default-inner-ctors name field-names field-types params bounds locs)
                      defs))
-          (min-initialized (min (ctors-min-initialized defs) (length fields))))
+          (min-initialized (min (ctors-min-initialized defs) (length fields)))
+          (prev (make-ssavalue)))
      (let ((dups (has-dups field-names)))
        (if dups (error (string "duplicate field name: \"" (car dups) "\" is not unique"))))
      (for-each (lambda (v)
@@ -892,16 +899,29 @@
          (local-def ,name)
          ,@(map (lambda (v) `(local ,v)) params)
          ,@(map (lambda (n v) (make-assignment n (bounds-to-TypeVar v #t))) params bounds)
-         (toplevel-only struct)
+         (toplevel-only struct (outerref ,name))
          (= ,name (call (core _structtype) (thismodule) (inert ,name) (call (core svec) ,@params)
                         (call (core svec) ,@(map quotify field-names))
                         ,mut ,min-initialized))
          (call (core _setsuper!) ,name ,super)
-         (call (core _typebody!) ,name (call (core svec) ,@field-types))
-         (if (&& (isdefined (outerref ,name))
-                 (call (core _equiv_typedef) (outerref ,name) ,name))
-             (null)
+         (if (isdefined (outerref ,name))
+             (block
+              (= ,prev (outerref ,name))
+              (if (call (core _equiv_typedef) ,prev ,name)
+                  ;; if this is compatible with an old definition, use the existing type object
+                  ;; and its parameters
+                  (block (= ,name ,prev)
+                         ,@(if (pair? params)
+                               `((= (tuple ,@params) (|.|
+                                                      ,(foldl (lambda (_ x) `(|.| ,x (quote body)))
+                                                              prev
+                                                              params)
+                                                      (quote parameters))))
+                               '()))
+                  ;; otherwise do an assignment to trigger an error
+                  (= (outerref ,name) ,name)))
              (= (outerref ,name) ,name))
+         (call (core _typebody!) ,name (call (core svec) ,@field-types))
          (null)))
        ;; "inner" constructors
        (scope-block
@@ -3345,7 +3365,12 @@ f(x) = yt(x)
        ((atom? e) e)
        (else
         (case (car e)
-          ((quote top core globalref outerref thismodule toplevel-only line break inert module toplevel null true false meta) e)
+          ((quote top core globalref outerref thismodule line break inert module toplevel null true false meta) e)
+          ((toplevel-only)
+           ;; hack to avoid generating a (method x) expr for struct types
+           (if (eq? (cadr e) 'struct)
+               (put! defined (caddr e) #t))
+           e)
           ((=)
            (let ((var (cadr e))
                  (rhs (cl-convert (caddr e) fname lam namemap defined toplevel interp)))

@@ -109,8 +109,15 @@ julia> nnz(A)
 ```
 """
 nnz(S::AbstractSparseMatrixCSC) = Int(getcolptr(S)[size(S, 2) + 1] - 1)
-nnz(S::ReshapedArray{T,1,<:AbstractSparseMatrixCSC}) where T = nnz(parent(S))
-count(pred, S::AbstractSparseMatrixCSC) = count(pred, nzvalview(S)) + pred(zero(eltype(S)))*(prod(size(S)) - nnz(S))
+nnz(S::ReshapedArray{<:Any,1,<:AbstractSparseMatrixCSC}) = nnz(parent(S))
+nnz(S::UpperTriangular{<:Any,<:AbstractSparseMatrixCSC}) = nnz1(S)
+nnz(S::LowerTriangular{<:Any,<:AbstractSparseMatrixCSC}) = nnz1(S)
+nnz(S::SparseMatrixCSCView) = nnz1(S)
+nnz1(S) = sum(length.(nzrange.(Ref(S), axes(S, 2))))
+
+function count(pred, S::AbstractSparseMatrixCSC)
+    count(pred, nzvalview(S)) + pred(zero(eltype(S)))*(prod(size(S)) - nnz(S))
+end
 
 """
     nonzeros(A)
@@ -138,6 +145,8 @@ julia> nonzeros(A)
 """
 nonzeros(S::SparseMatrixCSC) = getfield(S, :nzval)
 nonzeros(S::SparseMatrixCSCView)  = nonzeros(S.parent)
+nonzeros(S::UpperTriangular{<:Any,<:SparseMatrixCSCUnion}) = nonzeros(S.data)
+nonzeros(S::LowerTriangular{<:Any,<:SparseMatrixCSCUnion}) = nonzeros(S.data)
 
 """
     rowvals(A::AbstractSparseMatrixCSC)
@@ -164,6 +173,8 @@ julia> rowvals(A)
 """
 rowvals(S::SparseMatrixCSC) = getfield(S, :rowval)
 rowvals(S::SparseMatrixCSCView) = rowvals(S.parent)
+rowvals(S::UpperTriangular{<:Any,<:SparseMatrixCSCUnion}) = rowvals(S.data)
+rowvals(S::LowerTriangular{<:Any,<:SparseMatrixCSCUnion}) = rowvals(S.data)
 
 """
     nzrange(A::AbstractSparseMatrixCSC, col::Integer)
@@ -186,6 +197,8 @@ column. In conjunction with [`nonzeros`](@ref) and
 """
 nzrange(S::AbstractSparseMatrixCSC, col::Integer) = getcolptr(S)[col]:(getcolptr(S)[col+1]-1)
 nzrange(S::SparseMatrixCSCView, col::Integer) = nzrange(S.parent, S.indices[2][col])
+nzrange(S::UpperTriangular{<:Any,<:SparseMatrixCSCUnion}, i::Integer) = nzrangeup(S.data, i)
+nzrange(S::LowerTriangular{<:Any,<:SparseMatrixCSCUnion}, i::Integer) = nzrangelo(S.data, i)
 
 function Base.isstored(A::AbstractSparseMatrixCSC, i::Integer, j::Integer)
     @boundscheck checkbounds(A, i, j)
@@ -275,7 +288,7 @@ function _show_with_braille_patterns(io::IOContext, S::AbstractSparseMatrixCSC)
 end
 
 function Base.show(io::IOContext, S::AbstractSparseMatrixCSC)
-    if max(size(S)...) < 16 && !get(io, :compact, false)
+    if max(size(S)...) < 16 && !(get(io, :compact, false)::Bool)
         ioc = IOContext(io, :compact => true)
         println(ioc)
         Base.print_matrix(ioc, S)
@@ -3318,15 +3331,24 @@ julia> blockdiag(sparse(2I, 3, 3), sparse(4I, 2, 2))
  ⋅  ⋅  ⋅  ⋅  4
 ```
 """
+blockdiag() = spzeros(promote_type(), Int, 0, 0)
+
+function blockdiag(X::AbstractSparseMatrixCSC{Tv, Ti}...) where {Tv, Ti <: Integer}
+    _blockdiag(Tv, Ti, X...)
+end
+
 function blockdiag(X::AbstractSparseMatrixCSC...)
+    Tv = promote_type(map(x->eltype(nonzeros(x)), X)...)
+    Ti = promote_type(map(x->eltype(rowvals(x)), X)...)
+    _blockdiag(Tv, Ti, X...)
+end
+
+function _blockdiag(::Type{Tv}, ::Type{Ti}, X::AbstractSparseMatrixCSC...) where {Tv, Ti <: Integer}
     num = length(X)
     mX = Int[ size(x, 1) for x in X ]
     nX = Int[ size(x, 2) for x in X ]
     m = sum(mX)
     n = sum(nX)
-
-    Tv = promote_type(map(x->eltype(nonzeros(x)), X)...)
-    Ti = isempty(X) ? Int : promote_type(map(x->eltype(rowvals(x)), X)...)
 
     colptr = Vector{Ti}(undef, n+1)
     nnzX = Int[ nnz(x) for x in X ]
