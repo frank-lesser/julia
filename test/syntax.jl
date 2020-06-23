@@ -678,8 +678,8 @@ function count_meta_loc(exprs)
     return push_count
 end
 
-function is_return_ssavalue(ex::Expr)
-    ex.head === :return && isa(ex.args[1], Core.SSAValue)
+function is_return_ssavalue(ex)
+    ex isa Core.ReturnNode && ex.val isa Core.SSAValue
 end
 
 function is_pop_loc(ex::Expr)
@@ -2268,3 +2268,9 @@ end
 # issue #36196
 @test_throws ParseError("\"for\" at none:1 expected \"end\", got \")\"") Meta.parse("(for i=1; println())")
 @test_throws ParseError("\"try\" at none:1 expected \"end\", got \")\"") Meta.parse("(try i=1; println())")
+
+# issue #36272
+macro m36272()
+    :((a, b=1) -> a*b)
+end
+@test @m36272()(1) == 1

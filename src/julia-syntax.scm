@@ -1895,6 +1895,13 @@
                 (else
                  (error (string "invalid " syntax-str " \"" (deparse el) "\""))))))))
 
+(define (expand-if e)
+  (if (and (pair? (cadr e)) (eq? (car (cadr e)) '&&))
+      (let ((clauses (cdr (flatten-ex '&& (cadr e)))))
+        `(if (&& ,@(map expand-forms clauses))
+             ,@(map expand-forms (cddr e))))
+      (cons (car e) (map expand-forms (cdr e)))))
+
 ;; move an assignment into the last statement of a block to keep more statements at top level
 (define (sink-assignment lhs rhs)
   (if (and (pair? rhs) (eq? (car rhs) 'block))
@@ -2230,6 +2237,9 @@
                 ,(expand-forms (cadr e)) ,(expand-forms (caddr e)))
          (map expand-forms e)))
 
+   'if expand-if
+   'elseif expand-if
+
    'while
    (lambda (e)
      `(break-block loop-exit
@@ -2556,7 +2566,7 @@
           (and (memq var (scope:locals scope))  'local)
           (and (memq var (scope:globals scope))
                (if (and exclude-top-level-globals
-                        (null? (lam:vars (scope:lam scope)))
+                        (null? (lam:args (scope:lam scope)))
                         ;; don't inherit global decls from the outermost scope block
                         ;; in a top-level expression.
                         (or (not (scope:prev scope))
@@ -2636,13 +2646,13 @@
              '(false)
              '(true)))
         ((eq? (car e) 'lambda)
-         (let* ((args (lam:vars e))
+         (let* ((args (lam:argnames e))
                 (body (resolve-scopes- (lam:body e) (make-scope e args '() '() sp '() scope))))
            `(lambda ,(cadr e) ,(caddr e) ,body)))
         ((eq? (car e) 'scope-block)
          (let* ((blok            (cadr e)) ;; body of scope-block expression
                 (lam             (scope:lam scope))
-                (argnames        (lam:vars lam))
+                (argnames        (lam:argnames lam))
                 (toplevel?       (and (null? argnames) (eq? e (lam:body lam))))
                 (current-locals  (caddr lam)) ;; locals created so far in our lambda
                 (globals         (find-global-decls blok))
@@ -2755,7 +2765,7 @@
            ,(resolve-scopes- (cadddr e) scope (method-expr-static-parameters e))))
         (else
          (if (and (eq? (car e) '=) (symbol? (cadr e))
-                  scope (null? (lam:vars (scope:lam scope)))
+                  scope (null? (lam:args (scope:lam scope)))
                   (warn-var?! (cadr e) scope)
                   (= *scopewarn-opt* 1))
              (let* ((v    (cadr e))
@@ -2782,7 +2792,7 @@
 
 ;; names of arguments and local vars
 (define (lambda-all-vars e)
-  (append (lam:vars e) (caddr e)))
+  (append (lam:argnames e) (caddr e)))
 
 ;; compute set of variables referenced in a lambda but not bound by it
 (define (free-vars- e tab)
@@ -3201,6 +3211,7 @@ f(x) = yt(x)
   ;; This does a basic-block-local dominance analysis to find variables that
   ;; are never used undef.
   (let ((vi     (car (lam:vinfo lam)))
+        (args   (lam:argnames lam))
         (unused (table))  ;; variables not (yet) used (read from) in the current block
         (live   (table))  ;; variables that have been set in the current block
         (seen   (table))) ;; all variables we've seen assignments to
@@ -3221,6 +3232,11 @@ f(x) = yt(x)
       (restore (table)))
     (define (mark-used var)
       ;; remove variable from the unused table
+      ;; Note arguments are only "used" for purposes of this analysis when
+      ;; they are captured, since they are never undefined.
+      (if (and (has? unused var) (not (memq var args)))
+          (del! unused var)))
+    (define (mark-captured var)
       (if (has? unused var)
           (del! unused var)))
     (define (assign! var)
@@ -3272,7 +3288,7 @@ f(x) = yt(x)
                                          (get-methods e (lam:body lam))
                                          (list e))))
                    (for-each (lambda (ex)
-                               (for-each mark-used
+                               (for-each mark-captured
                                          (map car (cadr (lam:vinfo (cadddr ex))))))
                              all-methods)
                    (assign! (cadr e))))
@@ -3703,7 +3719,8 @@ f(x) = yt(x)
         (handler-level 0)     ;; exception handler nesting depth
         (catch-token-stack '())) ;; tokens identifying handler enter for current catch blocks
     (define (emit c)
-      (set! code (cons c code)))
+      (set! code (cons c code))
+      c)
     (define (make-label)
       (begin0 label-counter
               (set! label-counter (+ 1 label-counter))))
@@ -3951,15 +3968,21 @@ f(x) = yt(x)
                  (compile (cadr e) break-labels value tail)
                  #f))
             ((if elseif)
-             (let ((test `(gotoifnot ,(compile-cond (cadr e) break-labels) _))
+             (let ((tests (map (lambda (clause)
+                                 (emit `(gotoifnot ,(compile-cond clause break-labels) _)))
+                               (if (and (pair? (cadr e)) (eq? (car (cadr e)) '&&))
+                                   (cdadr e)
+                                   (list (cadr e)))))
                    (end-jump `(goto _))
                    (val (if (and value (not tail)) (new-mutable-var) #f)))
-               (emit test)
                (let ((v1 (compile (caddr e) break-labels value tail)))
                  (if val (emit-assignment val v1))
                  (if (and (not tail) (or (length> e 3) val))
                      (emit end-jump))
-                 (set-car! (cddr test) (make&mark-label))
+                 (let ((elselabel (make&mark-label)))
+                   (for-each (lambda (test)
+                               (set-car! (cddr test) elselabel))
+                             tests))
                  (let ((v2 (if (length> e 3)
                                (compile (cadddr e) break-labels value tail)
                                '(null))))

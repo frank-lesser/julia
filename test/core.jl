@@ -5178,6 +5178,12 @@ end
 @test let_Box5()() == 46
 @test let_noBox()() == 21
 
+function _assigns_and_captures_arg(a)
+    a = a
+    return ()->a
+end
+@test !any(contains_Box, code_lowered(_assigns_and_captures_arg,(Any,))[1].code)
+
 module TestModuleAssignment
 using Test
 @eval $(GlobalRef(TestModuleAssignment, :x)) = 1
@@ -7132,7 +7138,7 @@ let code = code_lowered(FieldConvert)[1].code
     @test code[8] == Expr(:call, GlobalRef(Core, :fieldtype), Core.SSAValue(1), 5)
     @test code[9] == Expr(:call, GlobalRef(Base, :convert), Core.SSAValue(8), Core.SlotNumber(6))
     @test code[10] == Expr(:new, Core.SSAValue(1), Core.SSAValue(3), Core.SSAValue(5), Core.SlotNumber(4), Core.SSAValue(7), Core.SSAValue(9))
-    @test code[11] == Expr(:return, Core.SSAValue(10))
+    @test code[11] == Core.ReturnNode(Core.SSAValue(10))
  end
 
 # Issue #32820

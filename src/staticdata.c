@@ -39,7 +39,7 @@ static void *const _tags[] = {
          &jl_expr_type, &jl_globalref_type, &jl_string_type,
          &jl_module_type, &jl_tvar_type, &jl_method_instance_type, &jl_method_type, &jl_code_instance_type,
          &jl_linenumbernode_type, &jl_lineinfonode_type,
-         &jl_gotonode_type, &jl_quotenode_type,
+         &jl_gotonode_type, &jl_quotenode_type, &jl_gotoifnot_type, &jl_argument_type, &jl_returnnode_type,
          &jl_pinode_type, &jl_phinode_type, &jl_phicnode_type, &jl_upsilonnode_type,
          &jl_type_type, &jl_bottom_type, &jl_ref_type, &jl_pointer_type, &jl_llvmpointer_type,
          &jl_vararg_type, &jl_abstractarray_type,
@@ -1189,7 +1189,6 @@ static void jl_update_all_fptrs(jl_serializer_state *s)
             else {
                 codeinst->invoke = (jl_callptr_t)fptr;
             }
-            jl_fptr_to_llvm(fptr, codeinst, specfunc);
         }
     }
     jl_register_fptrs(sysimage_base, &fvars, linfos, sysimg_fvars_max);
