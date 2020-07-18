@@ -32,6 +32,9 @@ let ref = Tuple{T, Val{T}} where T<:(Val{T} where T<:(Val{T} where T<:(Val{T} wh
     @test Core.Compiler.limit_type_size(ref, sig, Union{}, 100, 100) == ref
 end
 
+let t = Tuple{Ref{T},T,T} where T, c = Tuple{Ref, T, T} where T # #36407
+    @test t <: Core.Compiler.limit_type_size(t, c, Union{}, 1, 100)
+end
 
 @test Core.Compiler.unionlen(Union{}) == 1
 @test Core.Compiler.unionlen(Int8) == 1
@@ -1056,7 +1059,6 @@ end
 @test Const(false) ⊑ isdefined_tfunc(Const(:x), Const(:y))
 @test isdefined_tfunc(Vector{Int}, Const(1)) == Const(false)
 @test isdefined_tfunc(Vector{Any}, Const(1)) == Const(false)
-@test isdefined_tfunc(Module, Any, Any) === Union{}
 @test isdefined_tfunc(Module, Int) === Union{}
 @test isdefined_tfunc(Tuple{Any,Vararg{Any}}, Const(0)) === Const(false)
 @test isdefined_tfunc(Tuple{Any,Vararg{Any}}, Const(1)) === Const(true)
@@ -1386,6 +1388,15 @@ let egal_tfunc
     @test egal_tfunc(Union{Int64, Float64}, Integer) === Bool
     @test egal_tfunc(Union{Int64, Float64}, AbstractArray) === Const(false)
 end
+egal_conditional_lattice1(x, y) = x === y ? "" : 1
+egal_conditional_lattice2(x, y) = x + x === y ? "" : 1
+egal_conditional_lattice3(x, y) = x === y + y ? "" : 1
+@test Base.return_types(egal_conditional_lattice1, (Int64, Int64)) == Any[Union{Int, String}]
+@test Base.return_types(egal_conditional_lattice1, (Int32, Int64)) == Any[Int]
+@test Base.return_types(egal_conditional_lattice2, (Int64, Int64)) == Any[Union{Int, String}]
+@test Base.return_types(egal_conditional_lattice2, (Int32, Int64)) == Any[Int]
+@test Base.return_types(egal_conditional_lattice3, (Int64, Int64)) == Any[Union{Int, String}]
+@test Base.return_types(egal_conditional_lattice3, (Int32, Int64)) == Any[Int]
 
 using Core.Compiler: PartialStruct, nfields_tfunc, sizeof_tfunc, sizeof_nothrow
 @test sizeof_tfunc(Const(Ptr)) === sizeof_tfunc(Union{Ptr, Int, Type{Ptr{Int8}}, Type{Int}}) === Const(Sys.WORD_SIZE ÷ 8)
@@ -1400,6 +1411,20 @@ let PT = PartialStruct(Tuple{Int64,UInt64}, Any[Const(10, false), UInt64])
     @test nfields_tfunc(PT) === Const(2)
     @test sizeof_nothrow(PT)
 end
+@test nfields_tfunc(Type) === Int
+@test nfields_tfunc(Number) === Int
+@test nfields_tfunc(Int) === Const(0)
+@test nfields_tfunc(Complex) === Const(2)
+@test nfields_tfunc(Type{Type{Int}}) === Const(nfields(DataType))
+@test nfields_tfunc(UnionAll) === Const(2)
+@test nfields_tfunc(DataType) === Const(nfields(DataType))
+@test nfields_tfunc(Type{Int}) === Const(nfields(DataType))
+@test nfields_tfunc(Type{Integer}) === Const(nfields(DataType))
+@test nfields_tfunc(Type{Complex}) === Int
+@test nfields_tfunc(typeof(Union{})) === Const(0)
+@test nfields_tfunc(Type{Union{}}) === Const(0)
+@test nfields_tfunc(Tuple{Int, Vararg{Int}}) === Int
+@test nfields_tfunc(Tuple{Int, Integer}) === Const(2)
 
 using Core.Compiler: typeof_tfunc
 @test typeof_tfunc(Tuple{Vararg{Int}}) == Type{Tuple{Vararg{Int,N}}} where N
@@ -2660,3 +2685,52 @@ function symcmp36230(vec)
     return false
 end
 @test Base.return_types(symcmp36230, (Vector{Any},)) == Any[Bool]
+
+# Issue #36531, double varargs in abstract_iteration
+f36531(args...) = tuple((args...)...)
+@test @inferred(f36531(1,2,3)) == (1,2,3)
+@test code_typed(f36531, Tuple{Vararg{Int}}) isa Vector
+
+# PartialStruct results on typeinf edges
+partial_return_1(x) = (x, 1)
+partial_return_2(x) = Val{partial_return_1(x)[2]}
+
+@test Base.return_types(partial_return_2, (Int,)) == Any[Type{Val{1}}]
+
+# Precision of abstract_iteration
+f_splat(x) = (x...,)
+@test Base.return_types(f_splat, (Pair{Int,Int},)) == Any[Tuple{Int, Int}]
+
+# issue #32699
+f32699(a) = (id = a[1],).id
+@test Base.return_types(f32699, (Vector{Union{Int,Missing}},)) == Any[Union{Int,Missing}]
+g32699(a) = Tuple{a}
+@test Base.return_types(g32699, (Type{<:Integer},))[1] == Type{<:Tuple{Any}}
+@test Base.return_types(g32699, (Type,))[1] == Type{<:Tuple}
+
+# Inference precision of union-split calls
+function f_apply_union_split(fs, x)
+    i = rand(1:length(fs))
+    f = fs[i]
+    f(x)
+end
+
+@test Base.return_types(f_apply_union_split, Tuple{Tuple{typeof(sqrt), typeof(abs)}, Int64}) == Any[Union{Int64, Float64}]
+
+# Precision of typeassert with PartialStruct
+function f_typ_assert(x::Int)
+    y = (x, 1)
+    y = y::Any
+    Val{y[2]}
+end
+@test Base.return_types(f_typ_assert, (Int,)) == Any[Type{Val{1}}]
+
+function f_typ_assert2(x::Any)
+    y = (x::Union{Int, Float64}, 1)
+    y = y::Tuple{Int, Any}
+    (y[1], Val{y[2]}())
+end
+@test Base.return_types(f_typ_assert2, (Any,)) == Any[Tuple{Int, Val{1}}]
+
+f_generator_splat(t::Tuple) = tuple((identity(l) for l in t)...)
+@test Base.return_types(f_generator_splat, (Tuple{Symbol, Int64, Float64},)) == Any[Tuple{Symbol, Int64, Float64}]

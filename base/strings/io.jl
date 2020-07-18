@@ -94,7 +94,7 @@ julia> sprint(show, 66.66666; context=:compact => true)
 "66.6667"
 
 julia> sprint(showerror, BoundsError([1], 100))
-"BoundsError: attempt to access 1-element Array{Int64,1} at index [100]"
+"BoundsError: attempt to access 1-element Vector{Int64} at index [100]"
 ```
 """
 function sprint(f::Function, args...; context=nothing, sizehint::Integer=0)
@@ -172,6 +172,8 @@ julia> string("a", 1, true)
 ```
 """
 string(xs...) = print_to_string(xs...)
+
+string(a::Symbol) = String(a)
 
 # note: print uses an encoding determined by `io` (defaults to UTF-8), whereas
 #       write uses an encoding determined by `s` (UTF-8 for `String`)

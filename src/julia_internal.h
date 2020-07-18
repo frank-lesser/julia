@@ -444,6 +444,7 @@ int jl_has_concrete_subtype(jl_value_t *typ);
 jl_datatype_t *jl_inst_concrete_tupletype_v(jl_value_t **p, size_t np) JL_ALWAYS_LEAFTYPE;
 jl_datatype_t *jl_inst_concrete_tupletype(jl_svec_t *p) JL_ALWAYS_LEAFTYPE;
 jl_tupletype_t *jl_inst_arg_tuple_type(jl_value_t *arg1, jl_value_t **args, size_t nargs, int leaf);
+jl_tupletype_t *jl_lookup_arg_tuple_type(jl_value_t *arg1 JL_PROPAGATES_ROOT, jl_value_t **args, size_t nargs, int leaf);
 JL_DLLEXPORT void jl_method_table_insert(jl_methtable_t *mt, jl_method_t *method, jl_tupletype_t *simpletype);
 jl_datatype_t *jl_mk_builtin_func(jl_datatype_t *dt, const char *name, jl_fptr_args_t fptr) JL_GC_DISABLED;
 jl_value_t *jl_type_intersection_env_s(jl_value_t *a, jl_value_t *b, jl_svec_t **penv, int *issubty);
@@ -488,7 +489,7 @@ jl_method_instance_t *jl_method_lookup(jl_value_t **args, size_t nargs, size_t w
 jl_value_t *jl_gf_invoke(jl_value_t *types, jl_value_t *f, jl_value_t **args, size_t nargs);
 jl_method_instance_t *jl_lookup_generic(jl_value_t **args, uint32_t nargs, uint32_t callsite, size_t world) JL_ALWAYS_LEAFTYPE;
 JL_DLLEXPORT jl_value_t *jl_matching_methods(jl_tupletype_t *types, int lim, int include_ambiguous,
-                                             size_t world, size_t *min_valid, size_t *max_valid);
+                                             size_t world, size_t *min_valid, size_t *max_valid, int *ambig);
 
 JL_DLLEXPORT jl_datatype_t *jl_first_argument_datatype(jl_value_t *argtypes JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_value_t *jl_argument_datatype(jl_value_t *argt JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT;
@@ -1037,7 +1038,7 @@ void jl_mach_gc_end(void);
 
 typedef uint_t (*smallintset_hash)(size_t val, jl_svec_t *data);
 typedef int (*smallintset_eq)(size_t val, const void *key, jl_svec_t *data, uint_t hv);
-ssize_t jl_smallintset_lookup(jl_array_t *cache JL_PROPAGATES_ROOT, smallintset_eq eq, const void *key, jl_svec_t *data, uint_t hv);
+ssize_t jl_smallintset_lookup(jl_array_t *cache, smallintset_eq eq, const void *key, jl_svec_t *data, uint_t hv);
 void jl_smallintset_insert(jl_array_t **pcache, jl_value_t *parent, smallintset_hash hash, size_t val, jl_svec_t *data);
 
 // -- typemap.c -- //

@@ -710,7 +710,7 @@ back, call `readdir` with an absolute directory path and `join` set to true.
 
 By default, `readdir` sorts the list of names it returns. If you want to skip
 sorting the names and get them in the order that the file system lists them,
-you can use `readir(dir, sort=false)` to opt out of sorting.
+you can use `readdir(dir, sort=false)` to opt out of sorting.
 
 !!! compat "Julia 1.4"
     The `join` and `sort` keyword arguments require at least Julia 1.4.
@@ -890,12 +890,11 @@ function unlink(p::AbstractString)
 end
 
 # For move command
-function rename(src::AbstractString, dst::AbstractString)
+function rename(src::AbstractString, dst::AbstractString; force::Bool=false)
     err = ccall(:jl_fs_rename, Int32, (Cstring, Cstring), src, dst)
     # on error, default to cp && rm
     if err < 0
-        # force: is already done in the mv function
-        cp(src, dst; force=false, follow_symlinks=false)
+        cp(src, dst; force=force, follow_symlinks=false)
         rm(src; recursive=true)
     end
     nothing

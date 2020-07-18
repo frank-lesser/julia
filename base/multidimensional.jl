@@ -479,6 +479,10 @@ module IteratorsMD
 
     Base.LinearIndices(inds::CartesianIndices{N,R}) where {N,R} = LinearIndices{N,R}(inds.indices)
 
+    # array operations
+    Base.intersect(a::CartesianIndices{N}, b::CartesianIndices{N}) where N =
+        CartesianIndices(intersect.(a.indices, b.indices))
+
     # Views of reshaped CartesianIndices are used for partitions — ensure these are fast
     const CartesianPartition{T<:CartesianIndex, P<:CartesianIndices, R<:ReshapedArray{T,1,P}} = SubArray{T,1,R,Tuple{UnitRange{Int}},false}
     eltype(::Type{PartitionIterator{T}}) where {T<:ReshapedArrayLF} = SubArray{eltype(T), 1, T, Tuple{UnitRange{Int}}, true}
@@ -701,7 +705,6 @@ ensure_indexable(I::Tuple{}) = ()
 
 # In simple cases, we know that we don't need to use axes(A). Optimize those
 # until Julia gets smart enough to elide the call on its own:
-to_indices(A, I::Tuple{}) = ()
 @inline to_indices(A, I::Tuple{Vararg{Union{Integer, CartesianIndex}}}) = to_indices(A, (), I)
 # But some index types require more context spanning multiple indices
 # CartesianIndexes are simple; they just splat out
@@ -846,17 +849,17 @@ keyword argument.
 # Examples
 ```jldoctest
 julia> a = [2 4; 6 16]
-2×2 Array{Int64,2}:
+2×2 Matrix{Int64}:
  2   4
  6  16
 
 julia> diff(a, dims=2)
-2×1 Array{Int64,2}:
+2×1 Matrix{Int64}:
   2
  10
 
 julia> diff(vec(a))
-3-element Array{Int64,1}:
+3-element Vector{Int64}:
   4
  -2
  12
@@ -940,23 +943,23 @@ the same object. `fill!(A, Foo())` will return `A` filled with the result of eva
 # Examples
 ```jldoctest
 julia> A = zeros(2,3)
-2×3 Array{Float64,2}:
+2×3 Matrix{Float64}:
  0.0  0.0  0.0
  0.0  0.0  0.0
 
 julia> fill!(A, 2.)
-2×3 Array{Float64,2}:
+2×3 Matrix{Float64}:
  2.0  2.0  2.0
  2.0  2.0  2.0
 
 julia> a = [1, 1, 1]; A = fill!(Vector{Vector{Int}}(undef, 3), a); a[1] = 2; A
-3-element Array{Array{Int64,1},1}:
+3-element Vector{Vector{Int64}}:
  [2, 1, 1]
  [2, 1, 1]
  [2, 1, 1]
 
 julia> x = 0; f() = (global x += 1; x); fill!(Vector{Int}(undef, 3), f())
-3-element Array{Int64,1}:
+3-element Vector{Int64}:
  1
  1
  1
@@ -1470,7 +1473,7 @@ julia> A = map(isodd, reshape(Vector(1:8), (2,2,2)))
  0  0
 
 julia> unique(A)
-2-element Array{Bool,1}:
+2-element Vector{Bool}:
  1
  0
 
@@ -1669,37 +1672,37 @@ For the remaining keyword arguments, see the documentation of [`sort!`](@ref).
 # Examples
 ```jldoctest
 julia> sortslices([7 3 5; -1 6 4; 9 -2 8], dims=1) # Sort rows
-3×3 Array{Int64,2}:
+3×3 Matrix{Int64}:
  -1   6  4
   7   3  5
   9  -2  8
 
 julia> sortslices([7 3 5; -1 6 4; 9 -2 8], dims=1, lt=(x,y)->isless(x[2],y[2]))
-3×3 Array{Int64,2}:
+3×3 Matrix{Int64}:
   9  -2  8
   7   3  5
  -1   6  4
 
 julia> sortslices([7 3 5; -1 6 4; 9 -2 8], dims=1, rev=true)
-3×3 Array{Int64,2}:
+3×3 Matrix{Int64}:
   9  -2  8
   7   3  5
  -1   6  4
 
 julia> sortslices([7 3 5; 6 -1 -4; 9 -2 8], dims=2) # Sort columns
-3×3 Array{Int64,2}:
+3×3 Matrix{Int64}:
   3   5  7
  -1  -4  6
  -2   8  9
 
 julia> sortslices([7 3 5; 6 -1 -4; 9 -2 8], dims=2, alg=InsertionSort, lt=(x,y)->isless(x[2],y[2]))
-3×3 Array{Int64,2}:
+3×3 Matrix{Int64}:
   5   3  7
  -4  -1  6
   8  -2  9
 
 julia> sortslices([7 3 5; 6 -1 -4; 9 -2 8], dims=2, rev=true)
-3×3 Array{Int64,2}:
+3×3 Matrix{Int64}:
  7   5   3
  6  -4  -1
  9   8  -2
@@ -1716,7 +1719,7 @@ use the `by` or `lt` keyword argument to specify such an order.
 If `dims` is a tuple, the order of the dimensions in `dims` is
 relevant and specifies the linear order of the slices. E.g., if `A` is three
 dimensional and `dims` is `(1, 2)`, the orderings of the first two dimensions
-are re-arranged such such that the slices (of the remaining third dimension) are sorted.
+are re-arranged such that the slices (of the remaining third dimension) are sorted.
 If `dims` is `(2, 1)` instead, the same slices will be taken,
 but the result order will be row-major instead.
 

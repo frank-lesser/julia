@@ -120,7 +120,7 @@ static inline void jl_set_typeof(void *v, void *t) JL_NOTSAFEPOINT
 {
     // Do not call this on a value that is already initialized.
     jl_taggedvalue_t *tag = jl_astaggedvalue(v);
-    tag->type = (jl_value_t*)t;
+    jl_atomic_store_relaxed(&tag->type, (jl_value_t*)t);
 }
 #define jl_typeis(v,t) (jl_typeof(v)==(jl_value_t*)(t))
 
@@ -284,11 +284,6 @@ typedef struct _jl_method_t {
     // method's type signature. redundant with TypeMapEntry->specTypes
     jl_value_t *sig;
 
-    // list of potentially-ambiguous methods (nothing = none, Vector{Any} of TypeMapEntry otherwise)
-    jl_value_t *ambig;
-    // forward references to later items (typemap entries) which might sort before this one
-    jl_value_t *resorted;
-
     // table of all jl_method_instance_t specializations we have
     jl_svec_t *specializations; // allocated as [hashable, ..., NULL, linear, ....]
     jl_array_t *speckeyset; // index lookup by hash into specializations
@@ -355,6 +350,7 @@ typedef struct _jl_code_instance_t {
 
     // compilation state cache
     uint8_t isspecsig; // if specptr is a specialized function signature for specTypes->rettype
+    uint8_t precompile;  // if set, this will be added to the output system image
     jl_callptr_t invoke; // jlcall entry point
     jl_generic_specptr_t specptr; // private data for `jlcall entry point`
 } jl_code_instance_t;
@@ -461,6 +457,7 @@ typedef struct _jl_datatype_t {
     uint8_t zeroinit; // if one or more fields requires zero-initialization
     uint8_t isinlinealloc; // if this is allocated inline
     uint8_t has_concrete_subtype; // If clear, no value will have this datatype
+    uint8_t cached_by_hash; // stored in hash-based set cache (instead of linear cache)
 } jl_datatype_t;
 
 typedef struct {
@@ -522,14 +519,22 @@ typedef struct _jl_typemap_entry_t {
     int8_t va; // isVararg(sig)
 } jl_typemap_entry_t;
 
-// one level in a TypeMap tree
-// indexed by key if it is a sublevel in an array
+// one level in a TypeMap tree (each level splits on a type at a given offset)
 typedef struct _jl_typemap_level_t {
     JL_DATA_TYPE
-    jl_array_t *arg1;
-    jl_array_t *targ;
-    jl_typemap_entry_t *linear; // jl_typemap_t * (but no more levels)
-    jl_typemap_t *any; // type at offs is Any
+    // these vectors contains vectors of more levels in their intended visit order
+    // with an index that gives the functionality of a sorted dict.
+    // next split may be on Type{T} as LeafTypes then TypeName's parents up to Any
+    // next split may be on LeafType
+    // next split may be on TypeName
+    jl_array_t *arg1; // contains LeafType
+    jl_array_t *targ; // contains Type{LeafType}
+    jl_array_t *name1; // contains non-abstract TypeName, for parents up to (excluding) Any
+    jl_array_t *tname; // contains a dict of Type{TypeName}, for parents up to Any
+    // next a linear list of things too complicated at this level for analysis (no more levels)
+    jl_typemap_entry_t *linear;
+    // finally, start a new level if the type at offs is Any
+    jl_typemap_t *any;
 } jl_typemap_level_t;
 
 // contains the TypeMap for one Type
@@ -574,6 +579,8 @@ extern JL_DLLEXPORT jl_datatype_t *jl_abstractslot_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_slotnumber_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_typedslot_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_argument_type JL_GLOBALLY_ROOTED;
+extern JL_DLLEXPORT jl_datatype_t *jl_const_type JL_GLOBALLY_ROOTED;
+extern JL_DLLEXPORT jl_datatype_t *jl_partial_struct_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_simplevector_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_typename_t *jl_tuple_typename JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_typename_t *jl_vecelement_typename JL_GLOBALLY_ROOTED;
@@ -833,7 +840,9 @@ STATIC_INLINE jl_value_t *jl_svecref(void *t JL_PROPAGATES_ROOT, size_t i) JL_NO
 {
     assert(jl_typeis(t,jl_simplevector_type));
     assert(i < jl_svec_len(t));
-    return jl_svec_data(t)[i];
+    // while svec is supposedly immutable, in practice we sometimes publish it first
+    // and set the values lazily
+    return jl_atomic_load_relaxed(jl_svec_data(t) + i);
 }
 STATIC_INLINE jl_value_t *jl_svecset(
     void *t JL_ROOTING_ARGUMENT JL_PROPAGATES_ROOT,
@@ -841,6 +850,8 @@ STATIC_INLINE jl_value_t *jl_svecset(
 {
     assert(jl_typeis(t,jl_simplevector_type));
     assert(i < jl_svec_len(t));
+    // TODO: while svec is supposedly immutable, in practice we sometimes publish it first
+    // and set the values lazily. Those users should be using jl_atomic_store_release here.
     jl_svec_data(t)[i] = (jl_value_t*)x;
     if (x) jl_gc_wb(t, x);
     return (jl_value_t*)x;
@@ -875,7 +886,7 @@ STATIC_INLINE jl_value_t *jl_array_ptr_ref(void *a JL_PROPAGATES_ROOT, size_t i)
 {
     assert(((jl_array_t*)a)->flags.ptrarray);
     assert(i < jl_array_len(a));
-    return ((jl_value_t**)(jl_array_data(a)))[i];
+    return jl_atomic_load_relaxed(((jl_value_t**)(jl_array_data(a))) + i);
 }
 STATIC_INLINE jl_value_t *jl_array_ptr_set(
     void *a JL_ROOTING_ARGUMENT, size_t i,
@@ -883,7 +894,7 @@ STATIC_INLINE jl_value_t *jl_array_ptr_set(
 {
     assert(((jl_array_t*)a)->flags.ptrarray);
     assert(i < jl_array_len(a));
-    ((jl_value_t**)(jl_array_data(a)))[i] = (jl_value_t*)x;
+    jl_atomic_store_relaxed(((jl_value_t**)(jl_array_data(a))) + i, (jl_value_t*)x);
     if (x) {
         if (((jl_array_t*)a)->flags.how == 3) {
             a = jl_array_data_owner(a);
@@ -1206,6 +1217,7 @@ JL_DLLEXPORT int jl_egal(jl_value_t *a JL_MAYBE_UNROOTED, jl_value_t *b JL_MAYBE
 JL_DLLEXPORT uintptr_t jl_object_id(jl_value_t *v) JL_NOTSAFEPOINT;
 
 // type predicates and basic operations
+JL_DLLEXPORT int jl_type_equality_is_identity(jl_value_t *t1, jl_value_t *t2) JL_NOTSAFEPOINT;
 JL_DLLEXPORT int jl_has_free_typevars(jl_value_t *v) JL_NOTSAFEPOINT;
 JL_DLLEXPORT int jl_has_typevar(jl_value_t *t, jl_tvar_t *v) JL_NOTSAFEPOINT;
 JL_DLLEXPORT int jl_has_typevar_from_unionall(jl_value_t *t, jl_unionall_t *ua);
@@ -2100,6 +2112,10 @@ typedef struct {
 
     // Cache access. Default: jl_rettype_inferred.
     jl_codeinstance_lookup_t lookup;
+
+    // If not `nothing`, rewrite all generic calls to call
+    // generic_context(f, args...) instead of f(args...).
+    jl_value_t *generic_context;
 } jl_cgparams_t;
 extern JL_DLLEXPORT jl_cgparams_t jl_default_cgparams;
 extern JL_DLLEXPORT int jl_default_debug_info_kind;

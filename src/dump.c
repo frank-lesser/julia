@@ -278,7 +278,8 @@ static void jl_serialize_datatype(jl_serializer_state *s, jl_datatype_t *dt) JL_
             | (dt->isbitstype << 3)
             | (dt->zeroinit << 4)
             | (dt->isinlinealloc << 5)
-            | (dt->has_concrete_subtype << 6));
+            | (dt->has_concrete_subtype << 6)
+            | (dt->cached_by_hash << 7));
     if (!dt->abstract) {
         write_uint16(s->s, dt->ninitialized);
     }
@@ -568,7 +569,6 @@ static void jl_serialize_value_(jl_serializer_state *s, jl_value_t *v, int as_li
         write_uint8(s->s, TAG_METHOD);
         jl_method_t *m = (jl_method_t*)v;
         int internal = 1;
-        int external_mt = 0;
         internal = module_in_worklist(m->module);
         if (!internal) {
             // flag this in the backref table as special
@@ -581,22 +581,11 @@ static void jl_serialize_value_(jl_serializer_state *s, jl_value_t *v, int as_li
         write_uint8(s->s, internal);
         if (!internal)
             return;
-        jl_methtable_t *mt = jl_method_table_for((jl_value_t*)m->sig);
-        assert((jl_value_t*)mt != jl_nothing);
-        external_mt = !module_in_worklist(mt->module);
         jl_serialize_value(s, m->specializations);
         jl_serialize_value(s, m->speckeyset);
         jl_serialize_value(s, (jl_value_t*)m->name);
         jl_serialize_value(s, (jl_value_t*)m->file);
         write_int32(s->s, m->line);
-        if (external_mt) {
-            jl_serialize_value(s, jl_nothing);
-            jl_serialize_value(s, jl_nothing);
-        }
-        else {
-            jl_serialize_value(s, (jl_value_t*)m->ambig);
-            jl_serialize_value(s, (jl_value_t*)m->resorted);
-        }
         write_int32(s->s, m->called);
         write_int32(s->s, m->nargs);
         write_int32(s->s, m->nospecialize);
@@ -662,6 +651,8 @@ static void jl_serialize_value_(jl_serializer_state *s, jl_value_t *v, int as_li
         int flags = validate << 0;
         if (codeinst->invoke == jl_fptr_const_return)
             flags |= 1 << 2;
+        if (codeinst->precompile)
+            flags |= 1 << 3;
         write_uint8(s->s, flags);
         jl_serialize_value(s, (jl_value_t*)codeinst->def);
         if (validate || codeinst->min_world == 0) {
@@ -779,22 +770,6 @@ static void jl_serialize_value_(jl_serializer_state *s, jl_value_t *v, int as_li
                 jl_serialize_value(s, tn->mt);
                 ios_write(s->s, (char*)&tn->hash, sizeof(tn->hash));
             }
-            return;
-        }
-        if (t == jl_typemap_level_type) {
-            // perform some compression on the typemap levels
-            // (which will need to be rehashed during deserialization anyhow)
-            jl_typemap_level_t *node = (jl_typemap_level_t*)v;
-            assert( // make sure this type has the expected ordering and layout
-                offsetof(jl_typemap_level_t, arg1) == 0 * sizeof(jl_value_t*) &&
-                offsetof(jl_typemap_level_t, targ) == 1 * sizeof(jl_value_t*) &&
-                offsetof(jl_typemap_level_t, linear) == 2 * sizeof(jl_value_t*) &&
-                offsetof(jl_typemap_level_t, any) == 3 * sizeof(jl_value_t*) &&
-                sizeof(jl_typemap_level_t) == 4 * sizeof(jl_value_t*));
-            jl_serialize_value(s, node->arg1);
-            jl_serialize_value(s, node->targ);
-            jl_serialize_value(s, node->linear);
-            jl_serialize_value(s, node->any);
             return;
         }
 
@@ -993,7 +968,8 @@ static void jl_collect_backedges(jl_array_t *s, jl_array_t *t)
                         }
                         size_t min_valid = 0;
                         size_t max_valid = ~(size_t)0;
-                        jl_value_t *matches = jl_matching_methods((jl_tupletype_t*)sig, -1, 0, jl_world_counter, &min_valid, &max_valid);
+                        int ambig = 0;
+                        jl_value_t *matches = jl_matching_methods((jl_tupletype_t*)sig, -1, 0, jl_world_counter, &min_valid, &max_valid, &ambig);
                         if (matches == jl_false) {
                             valid = 0;
                             break;
@@ -1188,7 +1164,6 @@ static jl_value_t *jl_deserialize_datatype(jl_serializer_state *s, int pos, jl_v
     assert(pos == backref_list.len - 1 && "nothing should have been deserialized since assigning pos");
     backref_list.items[pos] = dt;
     dt->size = size;
-    dt->instance = NULL;
     dt->abstract = flags & 1;
     dt->mutabl = (flags >> 1) & 1;
     int has_layout = (flags >> 2) & 1;
@@ -1200,6 +1175,7 @@ static jl_value_t *jl_deserialize_datatype(jl_serializer_state *s, int pos, jl_v
     dt->zeroinit = (memflags >> 4) & 1;
     dt->isinlinealloc = (memflags >> 5) & 1;
     dt->has_concrete_subtype = (memflags >> 6) & 1;
+    dt->cached_by_hash = (memflags >> 7) & 1;
     dt->types = NULL;
     dt->parameters = NULL;
     dt->name = NULL;
@@ -1403,10 +1379,6 @@ static jl_value_t *jl_deserialize_value_method(jl_serializer_state *s, jl_value_
     m->line = read_int32(s->s);
     m->primary_world = jl_world_counter;
     m->deleted_world = ~(size_t)0;
-    m->ambig = jl_deserialize_value(s, (jl_value_t**)&m->ambig);
-    jl_gc_wb(m, m->ambig);
-    m->resorted = jl_deserialize_value(s, (jl_value_t**)&m->resorted);
-    jl_gc_wb(m, m->resorted);
     m->called = read_int32(s->s);
     m->nargs = read_int32(s->s);
     m->nospecialize = read_int32(s->s);
@@ -1494,6 +1466,8 @@ static jl_value_t *jl_deserialize_value_code_instance(jl_serializer_state *s, jl
     jl_gc_wb(codeinst, codeinst->rettype);
     if (constret)
         codeinst->invoke = jl_fptr_const_return;
+    if ((flags >> 3) & 1)
+        codeinst->precompile = 1;
     codeinst->next = (jl_code_instance_t*)jl_deserialize_value(s, (jl_value_t**)&codeinst->next);
     jl_gc_wb(codeinst, codeinst->next);
     if (validate)
@@ -1854,7 +1828,9 @@ static void jl_verify_edges(jl_array_t *targets, jl_array_t **pvalids)
         int valid = 1;
         size_t min_valid = 0;
         size_t max_valid = ~(size_t)0;
-        jl_value_t *matches = jl_matching_methods((jl_tupletype_t*)sig, -1, 0, jl_world_counter, &min_valid, &max_valid);
+        int ambig = 0;
+        // TODO: possibly need to included ambiguities too (for the optimizer correctness)?
+        jl_value_t *matches = jl_matching_methods((jl_tupletype_t*)sig, -1, 0, jl_world_counter, &min_valid, &max_valid, &ambig);
         if (matches == jl_false || jl_array_len(matches) != jl_array_len(expected)) {
             valid = 0;
         }
@@ -1919,7 +1895,7 @@ static void jl_insert_backedges(jl_array_t *list, jl_array_t *targets)
             while (codeinst) {
                 if (codeinst->min_world > 0)
                     codeinst->max_world = ~(size_t)0;
-                codeinst = codeinst->next;
+                codeinst = jl_atomic_load_relaxed(&codeinst->next);
             }
         }
         else {
@@ -2096,11 +2072,10 @@ JL_DLLEXPORT void jl_init_restored_modules(jl_array_t *init_order)
 JL_DLLEXPORT int jl_save_incremental(const char *fname, jl_array_t *worklist)
 {
     JL_TIMING(SAVE_MODULE);
-    char *tmpfname = strcat(strcpy((char *) alloca(strlen(fname)+8), fname), ".XXXXXX");
     ios_t f;
     jl_array_t *mod_array = NULL, *udeps = NULL;
-    if (ios_mkstemp(&f, tmpfname) == NULL) {
-        jl_printf(JL_STDERR, "Cannot open cache file \"%s\" for writing.\n", tmpfname);
+    if (ios_file(&f, fname, 1, 1, 1, 1) == NULL) {
+        jl_printf(JL_STDERR, "Cannot open cache file \"%s\" for writing.\n", fname);
         return 1;
     }
     JL_GC_PUSH2(&mod_array, &udeps);
@@ -2213,12 +2188,7 @@ JL_DLLEXPORT int jl_save_incremental(const char *fname, jl_array_t *worklist)
     }
     write_int32(&f, 0); // mark the end of the source text
     ios_close(&f);
-
     JL_GC_POP();
-    if (jl_fs_rename(tmpfname, fname) < 0) {
-        jl_printf(JL_STDERR, "Cannot write cache file \"%s\".\n", fname);
-        return 1;
-    }
 
     return 0;
 }
@@ -2356,8 +2326,7 @@ static void jl_recache_types(void) JL_GC_DISABLED
     }
 }
 
-// repeatedly look up older methods until we come to one that existed
-// at the time this module was serialized (e.g. ignoring deletion)
+// look up a method from a previously deserialized dependent module
 static jl_method_t *jl_lookup_method(jl_methtable_t *mt, jl_datatype_t *sig, size_t world)
 {
     if (world < jl_main_module->primary_world)

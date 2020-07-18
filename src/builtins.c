@@ -707,6 +707,24 @@ JL_CALLABLE(jl_f__apply_latest)
     return ret;
 }
 
+// Like `_apply`, but runs in the specified world.
+// If world > jl_world_counter, run in the latest world.
+JL_CALLABLE(jl_f__apply_in_world)
+{
+    JL_NARGSV(_apply_in_world, 2);
+    jl_ptls_t ptls = jl_get_ptls_states();
+    size_t last_age = ptls->world_age;
+    JL_TYPECHK(_apply_in_world, ulong, args[0]);
+    size_t world = jl_unbox_ulong(args[0]);
+    world = world <= jl_world_counter ? world : jl_world_counter;
+    if (!ptls->in_pure_callback) {
+        ptls->world_age = world;
+    }
+    jl_value_t *ret = do_apply(NULL, args+1, nargs-1, NULL);
+    ptls->world_age = last_age;
+    return ret;
+}
+
 // tuples ---------------------------------------------------------------------
 
 JL_CALLABLE(jl_f_tuple)
@@ -1527,6 +1545,7 @@ void jl_init_primitives(void) JL_GC_DISABLED
     jl_builtin_svec = add_builtin_func("svec", jl_f_svec);
     add_builtin_func("_apply_pure", jl_f__apply_pure);
     add_builtin_func("_apply_latest", jl_f__apply_latest);
+    add_builtin_func("_apply_in_world", jl_f__apply_in_world);
     add_builtin_func("_typevar", jl_f__typevar);
     add_builtin_func("_structtype", jl_f__structtype);
     add_builtin_func("_abstracttype", jl_f__abstracttype);
@@ -1562,6 +1581,8 @@ void jl_init_primitives(void) JL_GC_DISABLED
     add_builtin("SlotNumber", (jl_value_t*)jl_slotnumber_type);
     add_builtin("TypedSlot", (jl_value_t*)jl_typedslot_type);
     add_builtin("Argument", (jl_value_t*)jl_argument_type);
+    add_builtin("Const", (jl_value_t*)jl_const_type);
+    add_builtin("PartialStruct", (jl_value_t*)jl_partial_struct_type);
     add_builtin("IntrinsicFunction", (jl_value_t*)jl_intrinsic_type);
     add_builtin("Function", (jl_value_t*)jl_function_type);
     add_builtin("Builtin", (jl_value_t*)jl_builtin_type);

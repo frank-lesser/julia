@@ -95,7 +95,6 @@ pointer(s::String) = unsafe_convert(Ptr{UInt8}, s)
 pointer(s::String, i::Integer) = pointer(s)+(i-1)
 
 @pure ncodeunits(s::String) = Core.sizeof(s)
-@pure sizeof(s::String) = Core.sizeof(s)
 codeunit(s::String) = UInt8
 
 @inline function codeunit(s::String, i::Integer)
@@ -321,7 +320,8 @@ end
 """
     repeat(c::AbstractChar, r::Integer) -> String
 
-Repeat a character `r` times. This can equivalently be accomplished by calling [`c^r`](@ref ^).
+Repeat a character `r` times. This can equivalently be accomplished by calling
+[`c^r`](@ref :^(::Union{AbstractString, AbstractChar}, ::Integer)).
 
 # Examples
 ```jldoctest

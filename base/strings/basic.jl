@@ -347,6 +347,10 @@ cmp(a::Symbol, b::Symbol) = Int(sign(ccall(:strcmp, Int32, (Cstring, Cstring), a
 
 isless(a::Symbol, b::Symbol) = cmp(a, b) < 0
 
+# hashing
+
+hash(s::AbstractString, h::UInt) = hash(String(s), h)
+
 ## character index arithmetic ##
 
 """
@@ -686,7 +690,7 @@ reverseind(s::AbstractString, i::Integer) = thisind(s, ncodeunits(s)-i+1)
 
 Repeat a string `r` times. This can be written as `s^r`.
 
-See also: [`^`](@ref)
+See also: [`^`](@ref :^(::Union{AbstractString, AbstractChar}, ::Integer))
 
 # Examples
 ```jldoctest

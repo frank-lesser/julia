@@ -13,6 +13,8 @@ using Base: with_output_color
 
 using InteractiveUtils: subtypes
 
+using Unicode: normalize
+
 ## Help mode ##
 
 # This is split into helpmode and _helpmode to easier unittest _helpmode
@@ -107,6 +109,8 @@ Message(msg) = Message(msg, ())
 function Markdown.term(io::IO, msg::Message, columns)
     printstyled(io, msg.msg; msg.fmt...)
 end
+
+trimdocs(doc, brief::Bool) = doc
 
 function trimdocs(md::Markdown.MD, brief::Bool)
     brief || return md
@@ -326,6 +330,8 @@ function symbol_latex(s::String)
     return get(symbols_latex, s, "")
 end
 function repl_latex(io::IO, s::String)
+    # decompose NFC-normalized identifier to match tab-completion input
+    s = normalize(s, :NFD)
     latex = symbol_latex(s)
     if !isempty(latex)
         print(io, "\"")

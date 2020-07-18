@@ -41,6 +41,7 @@ include("expr.jl")
 include("error.jl")
 
 # core numeric operations & types
+==(x::T, y::T) where {T} = x === y
 include("bool.jl")
 include("number.jl")
 include("int.jl")
@@ -106,6 +107,7 @@ include("compiler/typeutils.jl")
 include("compiler/typelimits.jl")
 include("compiler/typelattice.jl")
 include("compiler/tfuncs.jl")
+include("compiler/stmtinfo.jl")
 
 include("compiler/abstractinterpretation.jl")
 include("compiler/typeinfer.jl")

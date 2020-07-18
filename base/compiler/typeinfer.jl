@@ -79,7 +79,6 @@ function typeinf(interp::AbstractInterpreter, frame::InferenceState)
     return true
 end
 
-
 function CodeInstance(result::InferenceResult, min_valid::UInt, max_valid::UInt,
                       may_compress=true, allow_discard_tree=true)
     inferred_result = result.src
@@ -94,6 +93,9 @@ function CodeInstance(result::InferenceResult, min_valid::UInt, max_valid::UInt,
             const_flags = 0x2
         elseif isconstType(result.result)
             rettype_const = result.result.parameters[1]
+            const_flags = 0x2
+        elseif isa(result.result, PartialStruct)
+            rettype_const = (result.result::PartialStruct).fields
             const_flags = 0x2
         else
             rettype_const = nothing
@@ -148,7 +150,8 @@ function cache_result!(interp::AbstractInterpreter, result::InferenceResult, min
 
     # TODO: also don't store inferred code if we've previously decided to interpret this function
     if !already_inferred
-        code_cache(interp)[result.linfo] = CodeInstance(result, min_valid, max_valid)
+        code_cache(interp)[result.linfo] = CodeInstance(result, min_valid, max_valid,
+            may_compress(interp), may_discard_trees(interp))
     end
     unlock_mi_inference(interp, result.linfo)
     nothing
@@ -165,12 +168,15 @@ function finish(me::InferenceState, interp::AbstractInterpreter)
     else
         # annotate fulltree with type information
         type_annotate!(me)
-        run_optimizer = (me.cached || me.parent !== nothing)
+        can_optimize = may_optimize(interp)
+        run_optimizer = (me.cached || me.parent !== nothing) && can_optimize
         if run_optimizer
             # construct the optimizer for later use, if we're building this IR to cache it
             # (otherwise, we'll run the optimization passes later, outside of inference)
             opt = OptimizationState(me, OptimizationParams(interp), interp)
             me.result.src = opt
+        elseif !can_optimize
+            me.result.src = me.src
         end
     end
     me.result.result = me.bestguess
@@ -376,6 +382,7 @@ function type_annotate!(sv::InferenceState)
                 deleteat!(states, i)
                 deleteat!(src.ssavaluetypes, i)
                 deleteat!(src.codelocs, i)
+                deleteat!(sv.stmt_info, i)
                 nexpr -= 1
                 if oldidx < length(changemap)
                     changemap[oldidx + 1] = -1
@@ -439,6 +446,10 @@ function merge_call_chain!(parent::InferenceState, ancestor::InferenceState, chi
     end
 end
 
+function is_same_frame(interp::AbstractInterpreter, linfo::MethodInstance, frame::InferenceState)
+    return linfo === frame.linfo
+end
+
 # Walk through `linfo`'s upstream call chain, starting at `parent`. If a parent
 # frame matching `linfo` is encountered, then there is a cycle in the call graph
 # (i.e. `linfo` is a descendant callee of itself). Upon encountering this cycle,
@@ -446,14 +457,14 @@ end
 # frame's `callers_in_cycle` field and adding the appropriate backedges. Finally,
 # we return `linfo`'s pre-existing frame. If no cycles are found, `nothing` is
 # returned instead.
-function resolve_call_cycle!(linfo::MethodInstance, parent::InferenceState)
+function resolve_call_cycle!(interp::AbstractInterpreter, linfo::MethodInstance, parent::InferenceState)
     frame = parent
     uncached = false
     limited = false
     while isa(frame, InferenceState)
         uncached |= !frame.cached # ensure we never add an uncached frame to a cycle
         limited |= frame.limited
-        if frame.linfo === linfo
+        if is_same_frame(interp, linfo, frame)
             if uncached
                 # our attempt to speculate into a constant call lead to an undesired self-cycle
                 # that cannot be converged: poison our call-stack (up to the discovered duplicate frame)
@@ -465,7 +476,7 @@ function resolve_call_cycle!(linfo::MethodInstance, parent::InferenceState)
             return frame
         end
         for caller in frame.callers_in_cycle
-            if caller.linfo === linfo
+            if is_same_frame(interp, linfo, caller)
                 if uncached
                     poison_callstack(parent, frame, false)
                     return true
@@ -486,7 +497,11 @@ function typeinf_edge(interp::AbstractInterpreter, method::Method, @nospecialize
     if code isa CodeInstance # return existing rettype if the code is already inferred
         update_valid_age!(min_world(code), max_world(code), caller)
         if isdefined(code, :rettype_const)
-            return Const(code.rettype_const), mi
+            if isa(code.rettype_const, Vector{Any}) && !(Vector{Any} <: code.rettype)
+                return PartialStruct(code.rettype, code.rettype_const), mi
+            else
+                return Const(code.rettype_const), mi
+            end
         else
             return code.rettype, mi
         end
@@ -496,7 +511,7 @@ function typeinf_edge(interp::AbstractInterpreter, method::Method, @nospecialize
         # (if we asked resolve_call_cyle, it might instead detect that there is a cycle that it can't merge)
         frame = false
     else
-        frame = resolve_call_cycle!(mi, caller)
+        frame = resolve_call_cycle!(interp, mi, caller)
     end
     if frame === false
         # completely new
@@ -525,7 +540,7 @@ function typeinf_edge(interp::AbstractInterpreter, method::Method, @nospecialize
 end
 
 function widenconst_bestguess(bestguess)
-    !isa(bestguess, Const) && !isa(bestguess, Type) && return widenconst(bestguess)
+    !isa(bestguess, Const) && !isa(bestguess, PartialStruct) && !isa(bestguess, Type) && return widenconst(bestguess)
     return bestguess
 end
 

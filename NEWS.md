@@ -18,10 +18,19 @@ Compiler/Runtime improvements
   This allows executable-relative paths to be embedded within executables on all
   platforms, not just MacOS, which the syntax is borrowed from. ([#35627])
 * Constant propogation now occurs through keyword arguments ([#35976])
+* The precompilation cache is now created atomically ([#36416]). Invoking _n_
+  Julia processes simultaneously may create _n_ temporary caches.
 
 Command-line option changes
 ---------------------------
 
+* There is no longer a concept of "home project": starting `julia --project=dir`
+  is now exactly equivalent to starting `julia` and then doing `pkg> activate
+  $dir` and `julia --project` is exactly equivalent to doing that where
+  `dir = Base.current_project()`. In particular, this means that if you do
+  `pkg> activate` after starting `julia` with the `--project` option (or with
+  `JULIA_PROJECT` set) it will take you to the default active project, which is
+  `@v1.5` unless you have modified `LOAD_PATH`. ([#36434])
 
 Multi-threading changes
 -----------------------
@@ -30,6 +39,10 @@ Multi-threading changes
 Build system changes
 --------------------
 
+* Windows Installer now has the option to 'Add Julia to Path'. To unselect this option
+  from the commandline simply remove the tasks you do not want to be installed: e.g.
+  `./julia-installer.exe /TASKS="desktopicon,startmenu,addtopath"`, adds a desktop
+  icon, a startmenu group icon, and adds Julia to system PATH.
 
 New library functions
 ---------------------
@@ -38,10 +51,13 @@ New library functions
 * New function `Base.Threads.foreach(f, channel::Channel)` for multithreaded `Channel` consumption. ([#34543]).
 * `Iterators.map` is added. It provides another syntax `Iterators.map(f, iterators...)`
   for writing `(f(args...) for args in zip(iterators...))`, i.e. a lazy `map` ([#34352]).
+* New function `sincospi` for simultaneously computing `sinpi(x)` and `cospi(x)` more
+  efficiently ([#35816]).
 
 New library features
 --------------------
 
+* The `redirect_*` functions can now be called on `IOContext` objects.
 
 Standard library changes
 ------------------------
@@ -53,10 +69,15 @@ Standard library changes
 * `sum`, `prod`, `maximum`, and `minimum` now support `init` keyword argument ([#36188], [#35839]).
 * `unique(f, itr; seen=Set{T}())` now allows you to declare the container type used for
   keeping track of values returned by `f` on elements of `itr` ([#36280]).
+* `Libdl` has been moved to `Base.Libc.Libdl`, however it is still accessible as an stdlib ([#35628]).
+* `first` and `last` functions now accept an integer as second argument to get that many
+  leading or trailing elements of any iterable ([#34868]).
+* `intersect` on `CartesianIndices` now returns `CartesianIndices` instead of `Vector{<:CartesianIndex}` ([#36643]).
 
 #### LinearAlgebra
 * New method `LinearAlgebra.issuccess(::CholeskyPivoted)` for checking whether pivoted Cholesky factorization was successful ([#36002]).
 * `UniformScaling` can now be indexed into using ranges to return dense matrices and vectors ([#24359]).
+* New function `LinearAlgebra.BLAS.get_num_threads()` for getting the number of BLAS threads. ([#36360])
 
 #### Markdown
 
@@ -92,7 +113,7 @@ Standard library changes
 * Display large sparse matrices with a Unicode "spy" plot of their nonzero patterns, and display small sparse matrices by an `Matrix`-like 2d layout of their contents.
 
 #### Dates
-
+* `Quarter` period is defined ([#35519]).
 
 #### Statistics
 

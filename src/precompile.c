@@ -326,7 +326,7 @@ static int precompile_enq_specialization_(jl_method_instance_t *mi, void *closur
                 !jl_ir_flag_inlineable((jl_array_t*)codeinst->inferred)) {
                 do_compile = 1;
             }
-            else if (codeinst->invoke != NULL) {
+            else if (codeinst->invoke != NULL || codeinst->precompile) {
                 do_compile = 1;
             }
         }
@@ -334,7 +334,7 @@ static int precompile_enq_specialization_(jl_method_instance_t *mi, void *closur
             jl_array_ptr_1d_push((jl_array_t*)closure, (jl_value_t*)mi);
             return 1;
         }
-        codeinst = codeinst->next;
+        codeinst = jl_atomic_load_relaxed(&codeinst->next);
     }
     return 1;
 }

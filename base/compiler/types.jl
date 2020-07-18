@@ -17,7 +17,6 @@ All AbstractInterpreters are expected to provide at least the following methods:
 """
 abstract type AbstractInterpreter; end
 
-
 """
     InferenceResult
 
@@ -46,6 +45,7 @@ struct OptimizationParams
     inline_cost_threshold::Int  # number of CPU cycles beyond which it's not worth inlining
     inline_nonleaf_penalty::Int # penalty for dynamic dispatch
     inline_tupleret_bonus::Int  # extra willingness for non-isbits tuple return types
+    inline_error_path_cost::Int # cost of (un-optimized) calls in blocks that throw
 
     # Duplicating for now because optimizer inlining requires it.
     # Keno assures me this will be removed in the near future
@@ -58,6 +58,7 @@ struct OptimizationParams
             inline_cost_threshold::Int = 100,
             inline_nonleaf_penalty::Int = 1000,
             inline_tupleret_bonus::Int = 400,
+            inline_error_path_cost::Int = 20,
             max_methods::Int = 3,
             tuple_splat::Int = 32,
             union_splitting::Int = 4,
@@ -67,6 +68,7 @@ struct OptimizationParams
             inline_cost_threshold,
             inline_nonleaf_penalty,
             inline_tupleret_bonus,
+            inline_error_path_cost,
             max_methods,
             tuple_splat,
             union_splitting,
@@ -189,3 +191,14 @@ lock_mi_inference(ni::NativeInterpreter, mi::MethodInstance) = (mi.inInference =
     See lock_mi_inference
 """
 unlock_mi_inference(ni::NativeInterpreter, mi::MethodInstance) = (mi.inInference = false; nothing)
+
+"""
+Emit an analysis remark during inference for the current line (`sv.pc`). These annotations are ignored
+by the native interpreter, but can be used by external tooling to annotate
+inference results.
+"""
+add_remark!(ni::NativeInterpreter, sv, s) = nothing
+
+may_optimize(ni::NativeInterpreter) = true
+may_compress(ni::NativeInterpreter) = true
+may_discard_trees(ni::NativeInterpreter) = true

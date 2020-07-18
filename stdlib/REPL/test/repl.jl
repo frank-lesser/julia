@@ -194,8 +194,8 @@ fake_repl(options = REPL.Options(confirm_exit=false,hascolor=false)) do stdin_wr
         @test occursin("shell> ", s) # check for the echo of the prompt
         @test occursin("'", s) # check for the echo of the input
         s = readuntil(stdout_read, "\n\n")
-        @test startswith(s, "\e[0mERROR: unterminated single quote\nStacktrace:\n [1] ") ||
-              startswith(s, "\e[0m\e[1m\e[91mERROR: \e[39m\e[22m\e[91munterminated single quote\e[39m\nStacktrace:\n [1] ")
+        @test startswith(s, "\e[0mERROR: unterminated single quote\nStacktrace:\n  [1] ") ||
+              startswith(s, "\e[0m\e[1m\e[91mERROR: \e[39m\e[22m\e[91munterminated single quote\e[39m\nStacktrace:\n  [1] ")
     end
 
     # issue #27293
@@ -331,6 +331,13 @@ fake_repl(options = REPL.Options(confirm_exit=false,hascolor=false)) do stdin_wr
     s2 = readuntil(stdout_read, "|||", keep=true)
     @test endswith(s2, " 0x321\r\e[13C|||") # should have a space (from Meta-rightarrow) and not
                                             # have a spurious C before ||| (the one here is not spurious!)
+
+    # "pass through" for ^x^x
+    write(stdin_write, "\x030x4321\n") # \x03 == ^c
+    readuntil(stdout_read, "0x4321")
+    write(stdin_write, "\e[A\x18\x18||\x18\x18||||") # uparrow, ^x^x||^x^x||||
+    s3 = readuntil(stdout_read, "||||", keep=true)
+    @test endswith(s3, "||0x4321\r\e[15C||||")
 
     # Delete line (^U) and close REPL (^D)
     write(stdin_write, "\x15\x04")
@@ -881,6 +888,13 @@ let term = REPL.Terminals.TTYTerminal("dumb",IOBuffer("1+2\n"),IOContext(IOBuffe
     @test_throws KeyError term[:bar]
 end
 
+# Ensure even the dumb REPL elides content
+let term = REPL.Terminals.TTYTerminal("dumb",IOBuffer("zeros(1000)\n"),IOBuffer(),IOBuffer())
+    r = REPL.BasicREPL(term)
+    REPL.run_repl(r)
+    @test contains(String(take!(term.out_stream)), "⋮")
+end
+
 
 # a small module for alternative keymap tests
 module AltLE
@@ -1093,13 +1107,31 @@ Short docs
 Long docs
 """
 f() = nothing
+@doc text"""
+    f_plain()
+
+Plain text docs
+"""
+f_plain() = nothing
+@doc html"""
+<h1><code>f_html()</code></h1>
+<p>HTML docs.</p>
+"""
+f_html() = nothing
 end # module BriefExtended
+
 buf = IOBuffer()
 md = Base.eval(REPL._helpmode(buf, "$(@__MODULE__).BriefExtended.f"))
 @test length(md.content) == 2 && isa(md.content[2], REPL.Message)
 buf = IOBuffer()
 md = Base.eval(REPL._helpmode(buf, "?$(@__MODULE__).BriefExtended.f"))
 @test length(md.content) == 1 && length(md.content[1].content[1].content) == 4
+buf = IOBuffer()
+txt = Base.eval(REPL._helpmode(buf, "$(@__MODULE__).BriefExtended.f_plain"))
+@test !isempty(sprint(show, txt))
+buf = IOBuffer()
+html = Base.eval(REPL._helpmode(buf, "$(@__MODULE__).BriefExtended.f_html"))
+@test !isempty(sprint(show, html))
 
 # PR #27562
 fake_repl() do stdin_write, stdout_read, repl
@@ -1215,3 +1247,45 @@ frontend_task = @async begin
 end
 REPL.start_repl_backend(backend)
 Base.wait(frontend_task)
+
+macro throw_with_linenumbernode(err)
+    Expr(:block, LineNumberNode(42, Symbol("test.jl")), :(() -> throw($err)))
+end
+
+@testset "last shown line infos" begin
+    out_stream = IOBuffer()
+    term = REPL.TTYTerminal("dumb", IOBuffer(), out_stream, IOBuffer())
+    repl = REPL.LineEditREPL(term, false)
+    repl.specialdisplay = REPL.REPLDisplay(repl)
+
+    REPL.print_response(repl, (methods(+), false), true, false)
+    seekstart(out_stream)
+    @test count(
+        contains(
+            "To edit a specific method, type the corresponding number into the REPL and " *
+            "press Ctrl+Q"
+        ),
+        eachline(out_stream),
+    ) == 1
+    take!(out_stream)
+
+    err = ErrorException("Foo")
+    bt = try
+        @throw_with_linenumbernode(err)()
+    catch
+        Base.catch_stack()
+    end
+
+    repl.backendref = REPL.REPLBackendRef(Channel(1), Channel(1))
+    put!(repl.backendref.response_channel, (bt, true))
+
+    REPL.print_response(repl, (err, true), true, false)
+    seekstart(out_stream)
+    @test count(
+        contains(
+            "To edit a specific method, type the corresponding number into the REPL and " *
+            "press Ctrl+Q"
+        ),
+        eachline(out_stream),
+    ) == 1
+end

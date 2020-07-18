@@ -3,7 +3,7 @@
 @nospecialize
 
 struct InvokeData
-    entry::Core.TypeMapEntry
+    entry::Method
     types0
     min_valid::UInt
     max_valid::UInt
@@ -683,17 +683,6 @@ function analyze_method!(idx::Int, sig::Signature, @nospecialize(metharg), meths
         return nothing
     end
 
-    # Check if we intersect any of this method's ambiguities
-    # TODO: We could split out the ambiguous case as another "union split" case.
-    # For now, we just reject the method
-    if method.ambig !== nothing && invoke_data === nothing
-        for entry::Core.TypeMapEntry in method.ambig
-            if typeintersect(sig.atype, entry.sig) !== Bottom
-                return nothing
-            end
-        end
-    end
-
     # Bail out if any static parameters are left as TypeVar
     ok = true
     for i = 1:length(methsp)
@@ -850,9 +839,9 @@ function inline_splatnew!(ir::IRCode, idx::Int)
         tup = eargs[2]
         tt = argextype(tup, ir, ir.sptypes)
         tnf = nfields_tfunc(tt)
-        # TODO: hoisting this tnf.val == nf.val check into codegen
+        # TODO: hoisting this tnf.val === nf.val check into codegen
         # would enable us to almost always do this transform
-        if tnf isa Const && tnf.val == nf.val
+        if tnf isa Const && tnf.val === nf.val
             n = tnf.val
             new_argexprs = Any[eargs[1]]
             for j = 1:n
@@ -943,12 +932,11 @@ is_builtin(s::Signature) =
 function inline_invoke!(ir::IRCode, idx::Int, sig::Signature, invoke_data::InvokeData, sv::OptimizationState, todo::Vector{Any})
     stmt = ir.stmts[idx][:inst]
     calltype = ir.stmts[idx][:type]
-    method = invoke_data.entry.func
+    method = invoke_data.entry
     (metharg, methsp) = ccall(:jl_type_intersection_with_env, Any, (Any, Any),
-                            sig.atype, method.sig)::SimpleVector
+            sig.atype, method.sig)::SimpleVector
     methsp = methsp::SimpleVector
-    result = analyze_method!(idx, sig, metharg, methsp, method, stmt, sv, true, invoke_data,
-                             calltype)
+    result = analyze_method!(idx, sig, metharg, methsp, method, stmt, sv, true, invoke_data, calltype)
     handle_single_case!(ir, stmt, idx, result, true, todo)
     update_valid_age!(invoke_data.min_valid, invoke_data.max_valid, sv)
     return nothing
@@ -1006,16 +994,41 @@ function process_simple!(ir::IRCode, idx::Int, params::OptimizationParams, world
     return (sig, invoke_data)
 end
 
+# This is not currently called in the regular course, but may be needed
+# if we ever want to re-run inlining again later in the pass pipeline after
+# additional type information was discovered.
+function recompute_method_matches(atype, sv)
+    # Regular case: Retrieve matching methods from cache (or compute them)
+    # World age does not need to be taken into account in the cache
+    # because it is forwarded from type inference through `sv.params`
+    # in the case that the cache is nonempty, so it should be unchanged
+    # The max number of methods should be the same as in inference most
+    # of the time, and should not affect correctness otherwise.
+    (meth, min_valid, max_valid, ambig) =
+        matching_methods(atype, sv.matching_methods_cache, sv.params.MAX_METHODS, sv.world)
+    update_valid_age!(min_valid, max_valid, sv)
+    MethodMatchInfo(meth, ambig)
+end
+
 function assemble_inline_todo!(ir::IRCode, sv::OptimizationState)
     # todo = (inline_idx, (isva, isinvoke, na), method, spvals, inline_linetable, inline_ir, lie)
     todo = Any[]
+    skip = find_throw_blocks(ir.stmts.inst, RefValue(ir))
     for idx in 1:length(ir.stmts)
+        idx in skip && continue
         r = process_simple!(ir, idx, sv.params, sv.world)
         r === nothing && continue
 
         stmt = ir.stmts[idx][:inst]
         calltype = ir.stmts[idx][:type]
+        info = ir.stmts[idx][:info]
+        # Inference determined this couldn't be analyzed. Don't question it.
+        if info === false
+            continue
+        end
+
         (sig, invoke_data) = r
+
 
         # Ok, now figure out what method to call
         if invoke_data !== nothing
@@ -1025,11 +1038,21 @@ function assemble_inline_todo!(ir::IRCode, sv::OptimizationState)
 
         nu = countunionsplit(sig.atypes)
         if nu == 1 || nu > sv.params.MAX_UNION_SPLITTING
+            if !isa(info, MethodMatchInfo)
+                info = nothing
+            end
+            infos = Any[info]
             splits = Any[sig.atype]
         else
-            splits = Any[]
-            for union_sig in UnionSplitSignature(sig.atypes)
-                push!(splits, argtypes_to_type(union_sig))
+            if !isa(info, UnionSplitInfo)
+                splits = Any[]
+                for union_sig in UnionSplitSignature(sig.atypes)
+                    push!(splits, argtypes_to_type(union_sig))
+                end
+                infos = Any[nothing for i = 1:length(splits)]
+            else
+                splits = info.sigs
+                infos = info.matches
             end
         end
 
@@ -1039,22 +1062,16 @@ function assemble_inline_todo!(ir::IRCode, sv::OptimizationState)
         too_many = false
         local meth
         local fully_covered = true
-        for atype in splits
-            # Regular case: Retrieve matching methods from cache (or compute them)
-            (meth, min_valid, max_valid) = get(sv.matching_methods_cache, atype) do
-                # World age does not need to be taken into account in the cache
-                # because it is forwarded from type inference through `sv.params`
-                # in the case that the cache is nonempty, so it should be unchanged
-                # The max number of methods should be the same as in inference most
-                # of the time, and should not affect correctness otherwise.
-                min_val = UInt[typemin(UInt)]
-                max_val = UInt[typemax(UInt)]
-                ms = _methods_by_ftype(atype, sv.params.MAX_METHODS,
-                    sv.world, min_val, max_val)
-                return (ms, min_val[1], max_val[1])
+        for i in 1:length(splits)
+            atype = splits[i]
+            info = infos[i]
+            if info === nothing
+                info = recompute_method_matches(atype, sv)
             end
-            if meth === false
+            meth = info.applicable
+            if meth === false || info.ambig
                 # Too many applicable methods
+                # Or there is a (partial?) ambiguity
                 too_many = true
                 break
             elseif length(meth) == 0
@@ -1069,8 +1086,6 @@ function assemble_inline_todo!(ir::IRCode, sv::OptimizationState)
             else
                 only_method = false
             end
-            update_valid_age!(min_valid, max_valid, sv)
-
             for match in meth::Vector{Any}
                 (metharg, methsp, method) = (match[1]::Type, match[2]::SimpleVector, match[3]::Method)
                 # TODO: This could be better
@@ -1099,15 +1114,13 @@ function assemble_inline_todo!(ir::IRCode, sv::OptimizationState)
         # we inline, even if the signature is not a dispatch tuple
         if signature_fully_covered && length(cases) == 0 && only_method isa Method
             if length(splits) > 1
-                # get match information for a single overall match instead of union splits
-                meth = get(sv.matching_methods_cache, sig.atype) do
-                    ms = _methods_by_ftype(sig.atype, sv.params.MAX_METHODS,
-                        sv.world, UInt[typemin(UInt)], UInt[typemin(UInt)])
-                    return ms
-                end
+                method = only_method
+                (metharg, methsp) = ccall(:jl_type_intersection_with_env, Any, (Any, Any),
+                    sig.atype, method.sig)::SimpleVector
+            else
                 @assert length(meth) == 1
+                (metharg, methsp, method) = (meth[1][1]::Type, meth[1][2]::SimpleVector, meth[1][3]::Method)
             end
-            (metharg, methsp, method) = (meth[1][1]::Type, meth[1][2]::SimpleVector, meth[1][3]::Method)
             fully_covered = true
             case = analyze_method!(idx, sig, metharg, methsp, method,
                 stmt, sv, false, nothing, calltype)
@@ -1166,7 +1179,7 @@ function compute_invoke_data(@nospecialize(atypes), world::UInt)
     invoke_entry = ccall(:jl_gf_invoke_lookup, Any, (Any, UInt),
                          invoke_types, world) # XXX: min_valid, max_valid
     invoke_entry === nothing && return nothing
-    invoke_data = InvokeData(invoke_entry::Core.TypeMapEntry, invoke_types, min_valid[1], max_valid[1])
+    invoke_data = InvokeData(invoke_entry::Method, invoke_types, min_valid[1], max_valid[1])
     atype0 = atypes[2]
     atypes = atypes[4:end]
     pushfirst!(atypes, atype0)
