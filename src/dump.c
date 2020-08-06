@@ -976,7 +976,8 @@ static void jl_collect_backedges(jl_array_t *s, jl_array_t *t)
                         }
                         size_t k;
                         for (k = 0; k < jl_array_len(matches); k++) {
-                            jl_array_ptr_set(matches, k, jl_svecref(jl_array_ptr_ref(matches, k), 2));
+                            jl_method_match_t *match = (jl_method_match_t *)jl_array_ptr_ref(matches, k);
+                            jl_array_ptr_set(matches, k, match->method);
                         }
                         jl_array_ptr_1d_push(t, callee);
                         jl_array_ptr_1d_push(t, matches);
@@ -1837,7 +1838,8 @@ static void jl_verify_edges(jl_array_t *targets, jl_array_t **pvalids)
         else {
             size_t j, k, l = jl_array_len(expected);
             for (k = 0; k < jl_array_len(matches); k++) {
-                jl_method_t *m = (jl_method_t*)jl_svecref(jl_array_ptr_ref(matches, k), 2);
+                jl_method_match_t *match = (jl_method_match_t*)jl_array_ptr_ref(matches, k);
+                jl_method_t *m = match->method;
                 for (j = 0; j < l; j++) {
                     if (m == (jl_method_t*)jl_array_ptr_ref(expected, j))
                         break;
@@ -2565,7 +2567,7 @@ void jl_init_serializer(void)
                      jl_upsilonnode_type, jl_type_type, jl_bottom_type, jl_ref_type,
                      jl_pointer_type, jl_vararg_type, jl_abstractarray_type, jl_nothing_type,
                      jl_densearray_type, jl_function_type, jl_typename_type,
-                     jl_builtin_type, jl_task_type, jl_uniontype_type, jl_typetype_type,
+                     jl_builtin_type, jl_task_type, jl_uniontype_type,
                      jl_array_any_type, jl_intrinsic_type,
                      jl_abstractslot_type, jl_methtable_type, jl_typemap_level_type,
                      jl_voidpointer_type, jl_newvarnode_type, jl_abstractstring_type,

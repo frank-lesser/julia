@@ -302,16 +302,34 @@ function sizeof_nothrow(@nospecialize(x))
         end
     elseif isa(x, Conditional)
         return true
-    else
-        x = widenconst(x)
     end
     if isa(x, Union)
         return sizeof_nothrow(x.a) && sizeof_nothrow(x.b)
     end
-    isconstType(x) && (x = x.parameters[1]) # since sizeof(typeof(x)) == sizeof(x)
-    x === DataType && return false
-    return isconcretetype(x) || isprimitivetype(x)
+    t, exact = instanceof_tfunc(x)
+    if !exact
+        # Could always be bottom at runtime, which throws
+        return false
+    end
+    if t !== Bottom
+        t === DataType && return true
+        x = t
+        x = unwrap_unionall(x)
+        if isa(x, Union)
+            isinline, sz, _ = uniontype_layout(x)
+            return isinline
+        end
+        isa(x, DataType) || return false
+        x.layout == C_NULL && return false
+        (datatype_nfields(x) == 0 && !datatype_pointerfree(x)) && return false
+        return true
+    else
+        x = widenconst(x)
+        x === DataType && return false
+        return isconcretetype(x) || isprimitivetype(x)
+    end
 end
+
 function _const_sizeof(@nospecialize(x))
     # Constant Vector does not have constant size
     isa(x, Vector) && return Int
@@ -330,12 +348,27 @@ function sizeof_tfunc(@nospecialize(x),)
     isa(x, Const) && return _const_sizeof(x.val)
     isa(x, Conditional) && return _const_sizeof(Bool)
     isconstType(x) && return _const_sizeof(x.parameters[1])
-    x = widenconst(x)
     if isa(x, Union)
         return tmerge(sizeof_tfunc(x.a), sizeof_tfunc(x.b))
     end
-    x !== DataType && isconcretetype(x) && return _const_sizeof(x)
-    isprimitivetype(x) && return _const_sizeof(x)
+    # Core.sizeof operates on either a type or a value. First check which
+    # case we're in.
+    t, exact = instanceof_tfunc(x)
+    if t !== Bottom
+        # The value corresponding to `x` at runtime could be a type.
+        # Normalize the query to ask about that type.
+        x = unwrap_unionall(t)
+        if isa(x, Union)
+            isinline, sz, _ = uniontype_layout(x)
+            return isinline ? Const(Int(sz)) : (exact ? Bottom : Int)
+        end
+        isa(x, DataType) || return Int
+        (isconcretetype(x) || isprimitivetype(x)) && return _const_sizeof(x)
+    else
+        x = widenconst(x)
+        x !== DataType && isconcretetype(x) && return _const_sizeof(x)
+        isprimitivetype(x) && return _const_sizeof(x)
+    end
     return Int
 end
 add_tfunc(Core.sizeof, 1, 1, sizeof_tfunc, 1)
@@ -894,12 +927,16 @@ function _fieldtype_nothrow(@nospecialize(s), exact::Bool, name::Const)
     isa(fld, Int) || return false
     ftypes = datatype_fieldtypes(u)
     nf = length(ftypes)
-    if u.name === Tuple.name && fld >= nf && isvarargtype(ftypes[nf])
-        # If we don't know the exact type, the length of the tuple will be determined
-        # at runtime and we can't say anything.
-        return exact
+    fld >= 1 || return false
+    if u.name === Tuple.name && nf > 0 && isvarargtype(ftypes[nf])
+        if !exact && fld >= nf
+            # If we don't know the exact type, the length of the tuple will be determined
+            # at runtime and we can't say anything.
+            return false
+        end
+    elseif fld > nf
+        return false
     end
-    (fld >= 1 && fld <= nf) || return false
     return true
 end
 
@@ -1201,14 +1238,14 @@ function invoke_tfunc(interp::AbstractInterpreter, @nospecialize(ft), @nospecial
     isdispatchelem(ft) || return Any # check that we might not have a subtype of `ft` at runtime, before doing supertype lookup below
     types = rewrap_unionall(Tuple{ft, unwrap_unionall(types).parameters...}, types)
     argtype = Tuple{ft, argtype.parameters...}
-    meth = ccall(:jl_gf_invoke_lookup, Any, (Any, UInt), types, get_world_counter(interp))
-    if meth === nothing
+    result = findsup(types, method_table(interp))
+    if result === nothing
         return Any
     end
-    # XXX: update_valid_age!(min_valid[1], max_valid[1], sv)
-    meth = meth::Method
-    (ti, env) = ccall(:jl_type_intersection_with_env, Any, (Any, Any), argtype, meth.sig)::SimpleVector
-    rt, edge = typeinf_edge(interp, meth, ti, env, sv)
+    method, valid_worlds = result
+    update_valid_age!(sv, valid_worlds)
+    (ti, env) = ccall(:jl_type_intersection_with_env, Any, (Any, Any), argtype, method.sig)::SimpleVector
+    rt, edge = typeinf_edge(interp, method, ti, env, sv)
     edge !== nothing && add_backedge!(edge::MethodInstance, sv)
     return rt
 end

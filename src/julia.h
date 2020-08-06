@@ -65,6 +65,23 @@
 #  define JL_THREAD_LOCAL
 #endif
 
+// Duplicated from options.h
+#if defined(__has_feature) // Clang flavor
+#if __has_feature(address_sanitizer)
+#define JL_ASAN_ENABLED
+#endif
+#if __has_feature(memory_sanitizer)
+#define JL_MSAN_ENABLED
+#endif
+#if __has_feature(thread_sanitizer)
+#define JL_TSAN_ENABLED
+#endif
+#else // GCC flavor
+#if defined(__SANITIZE_ADDRESS__)
+#define JL_ASAN_ENABLED
+#endif
+#endif // __has_feature
+
 #define container_of(ptr, type, member) \
     ((type *) ((char *)(ptr) - offsetof(type, member)))
 
@@ -559,6 +576,16 @@ typedef struct {
     jl_array_t *args;
 } jl_expr_t;
 
+typedef struct {
+    JL_DATA_TYPE
+    jl_tupletype_t *spec_types;
+    jl_svec_t *sparams;
+    jl_method_t *method;
+    // A bool on the julia side, but can be temporarily 0x2 as a sentinel
+    // during construction.
+    uint8_t fully_covers;
+} jl_method_match_t;
+
 // constants and type objects -------------------------------------------------
 
 // kinds
@@ -570,7 +597,6 @@ extern JL_DLLEXPORT jl_datatype_t *jl_tvar_type JL_GLOBALLY_ROOTED;
 
 extern JL_DLLEXPORT jl_datatype_t *jl_any_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_unionall_t *jl_type_type JL_GLOBALLY_ROOTED;
-extern JL_DLLEXPORT jl_unionall_t *jl_typetype_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_typename_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_typename_t *jl_type_typename JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_symbol_type JL_GLOBALLY_ROOTED;
@@ -581,6 +607,7 @@ extern JL_DLLEXPORT jl_datatype_t *jl_typedslot_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_argument_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_const_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_partial_struct_type JL_GLOBALLY_ROOTED;
+extern JL_DLLEXPORT jl_datatype_t *jl_method_match_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_simplevector_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_typename_t *jl_tuple_typename JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_typename_t *jl_vecelement_typename JL_GLOBALLY_ROOTED;
@@ -1772,11 +1799,20 @@ typedef struct _jl_task_t {
     uint8_t sticky; // record whether this Task can be migrated to a new thread
 
 // hidden state:
+    // id of owning thread - does not need to be defined until the task runs
+    int16_t tid;
+    // multiqueue priority
+    int16_t prio;
+
     jl_ucontext_t ctx; // saved thread state
     void *stkbuf; // malloc'd memory (either copybuf or stack)
     size_t bufsz; // actual sizeof stkbuf
     unsigned int copy_stack:31; // sizeof stack for copybuf
     unsigned int started:1;
+
+#if defined(JL_TSAN_ENABLED)
+    void *tsan_state;
+#endif
 
     // current exception handler
     jl_handler_t *eh;
@@ -1787,13 +1823,6 @@ typedef struct _jl_task_t {
     // current world age
     size_t world_age;
 
-    // id of owning thread
-    // does not need to be defined until the task runs
-    int16_t tid;
-    /* for the multiqueue */
-    int16_t prio;
-    // This is statically initialized when the task is not holding any locks
-    arraylist_t locks;
     jl_timing_block_t *timing_stack;
 } jl_task_t;
 
@@ -2066,6 +2095,11 @@ typedef struct {
 
 #define jl_current_task (jl_get_ptls_states()->current_task)
 #define jl_root_task (jl_get_ptls_states()->root_task)
+
+JL_DLLEXPORT jl_value_t *jl_get_current_task(void);
+
+JL_DLLEXPORT jl_jmp_buf *jl_get_safe_restore(void);
+JL_DLLEXPORT void jl_set_safe_restore(jl_jmp_buf *);
 
 // codegen interface ----------------------------------------------------------
 // The root propagation here doesn't have to be literal, but callers should

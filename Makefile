@@ -181,6 +181,11 @@ endif
 ifeq ($(USE_LLVM_SHLIB),1)
 JL_PRIVATE_LIBS-$(USE_SYSTEM_LLVM) += libLLVM libLLVM-9jl
 endif
+ifeq ($(OS),Darwin)
+JL_PRIVATE_LIBS-$(USE_SYSTEM_LIBUNWIND) += libosxunwind
+else
+JL_PRIVATE_LIBS-$(USE_SYSTEM_LIBUNWIND) += libunwind
+endif
 
 ifeq ($(USE_SYSTEM_LIBM),0)
 JL_PRIVATE_LIBS-$(USE_SYSTEM_OPENLIBM) += libopenlibm
@@ -373,10 +378,7 @@ endif
 	-rm -f $(DESTDIR)$(datarootdir)/julia/stdlib/$(VERSDIR)/*/build-checked
 	# Copy in beautiful new man page
 	$(INSTALL_F) $(build_man1dir)/julia.1 $(DESTDIR)$(man1dir)/
-	# Copy icon and .desktop file
-	mkdir -p $(DESTDIR)$(datarootdir)/icons/hicolor/scalable/apps/
-	$(INSTALL_F) $(JULIAHOME)/contrib/julia.svg $(DESTDIR)$(datarootdir)/icons/hicolor/scalable/apps/
-	-touch -c $(DESTDIR)$(datarootdir)/icons/hicolor/
+	# Copy .desktop file
 	mkdir -p $(DESTDIR)$(datarootdir)/applications/
 	$(INSTALL_F) $(JULIAHOME)/contrib/julia.desktop $(DESTDIR)$(datarootdir)/applications/
 	# Install appdata file

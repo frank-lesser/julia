@@ -37,6 +37,7 @@ jl_datatype_t *jl_typedslot_type;
 jl_datatype_t *jl_argument_type;
 jl_datatype_t *jl_const_type;
 jl_datatype_t *jl_partial_struct_type;
+jl_datatype_t *jl_method_match_type;
 jl_datatype_t *jl_simplevector_type;
 jl_typename_t *jl_tuple_typename;
 jl_datatype_t *jl_anytuple_type;
@@ -80,8 +81,6 @@ jl_value_t *jl_nothing;
 
 JL_DLLEXPORT jl_value_t *jl_true;
 JL_DLLEXPORT jl_value_t *jl_false;
-
-jl_unionall_t *jl_typetype_type;
 
 jl_unionall_t *jl_array_type;
 jl_typename_t *jl_array_typename;
@@ -2399,6 +2398,11 @@ void jl_init_types(void) JL_GC_DISABLED
                                        jl_perm_symsvec(2, "typ", "fields"),
                                        jl_svec2(jl_any_type, jl_array_any_type), 0, 0, 2);
 
+    jl_method_match_type = jl_new_datatype(jl_symbol("MethodMatch"), core, jl_any_type, jl_emptysvec,
+                                       jl_perm_symsvec(4, "spec_types", "sparams", "method", "fully_covers"),
+                                       jl_svec(4, jl_type_type, jl_simplevector_type, jl_method_type, jl_bool_type), 0, 0, 4);
+
+
     // all Kinds share the Type method table (not the nonfunction one)
     jl_unionall_type->name->mt = jl_uniontype_type->name->mt = jl_datatype_type->name->mt =
         jl_type_type_mt;
@@ -2432,12 +2436,6 @@ void jl_init_types(void) JL_GC_DISABLED
                             (jl_value_t*)jl_anytuple_type);
     jl_anytuple_type_type = (jl_unionall_t*)jl_new_struct(jl_unionall_type,
                                                           tttvar, (jl_value_t*)jl_wrap_Type((jl_value_t*)tttvar));
-
-    // Type{T}
-    jl_tvar_t *typetype_tvar = tvar("T");
-    jl_typetype_type =
-        (jl_unionall_t*)jl_new_struct(jl_unionall_type, typetype_tvar,
-                                      jl_apply_type1((jl_value_t*)jl_type_type, (jl_value_t*)typetype_tvar));
 
     jl_tvar_t *ntval_var = jl_new_typevar(jl_symbol("T"), (jl_value_t*)jl_bottom_type,
                                           (jl_value_t*)jl_anytuple_type);
